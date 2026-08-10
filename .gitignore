@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+data/
+logs/
+build/
+*.log
+.DS_Store
+fastlane/api_key.json
+*.p8
+Gemfile.lock
+coverage/
+*.tsbuildinfo

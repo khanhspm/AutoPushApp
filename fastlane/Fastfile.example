@@ -1,0 +1,114 @@
+require "json"
+
+def required_env(name)
+  value = ENV[name].to_s.strip
+  UI.user_error!("Missing #{name}") if value.empty?
+  value
+end
+
+def manual_provisioning_profiles
+  raw = required_env("AUTOPUSH_PROVISIONING_PROFILES_JSON")
+  entries = JSON.parse(raw)
+  UI.user_error!("AUTOPUSH_PROVISIONING_PROFILES_JSON must be a non-empty array") unless entries.is_a?(Array) && !entries.empty?
+
+  profiles = {}
+  entries.each_with_index do |entry, index|
+    UI.user_error!("Provisioning profile mapping #{index + 1} must be an object") unless entry.is_a?(Hash)
+
+    bundle_id = entry["bundleId"].to_s.strip
+    profile_name = entry["profileName"].to_s.strip
+    UI.user_error!("Provisioning profile mapping #{index + 1} is missing bundleId") if bundle_id.empty?
+    UI.user_error!("Provisioning profile mapping #{index + 1} is missing profileName") if profile_name.empty?
+    UI.user_error!("Duplicate provisioning profile mapping for #{bundle_id}") if profiles.key?(bundle_id)
+
+    profiles[bundle_id] = profile_name
+  end
+
+  profiles
+rescue JSON::ParserError => error
+  UI.user_error!("Invalid AUTOPUSH_PROVISIONING_PROFILES_JSON: #{error.message}")
+end
+
+def configure_signing(gym_options)
+  signing_mode = ENV.fetch("AUTOPUSH_SIGNING_MODE", "match").strip.downcase
+
+  case signing_mode
+  when "match"
+    api_key = app_store_connect_api_key(
+      key_id: required_env("APP_STORE_CONNECT_API_KEY_ID"),
+      issuer_id: required_env("APP_STORE_CONNECT_API_ISSUER_ID"),
+      key_filepath: required_env("APP_STORE_CONNECT_API_KEY_PATH"),
+      in_house: false
+    )
+
+    required_env("MATCH_PASSWORD")
+    match(
+      type: "adhoc",
+      readonly: true,
+      api_key: api_key
+    )
+  when "manual"
+    team_id = required_env("AUTOPUSH_APPLE_TEAM_ID")
+    signing_certificate = required_env("AUTOPUSH_SIGNING_CERTIFICATE")
+
+    gym_options[:export_team_id] = team_id
+    gym_options[:codesigning_identity] = signing_certificate
+    gym_options[:skip_profile_detection] = true
+    gym_options[:export_options] = {
+      signingStyle: "manual",
+      teamID: team_id,
+      signingCertificate: signing_certificate,
+      provisioningProfiles: manual_provisioning_profiles
+    }
+  else
+    UI.user_error!("Unsupported AUTOPUSH_SIGNING_MODE: #{signing_mode}")
+  end
+end
+
+default_platform(:ios)
+
+platform :ios do
+  desc "Build and distribute to Firebase App Distribution"
+  lane :distribute do |options|
+    app_version = options[:app_version].to_s.strip
+    build_num = options[:build_number]
+    notes = options[:release_notes] || ""
+    scheme = options[:scheme]
+    configuration = options[:configuration]
+    firebase_app_id = options[:firebase_app_id]
+    firebase_groups = options[:firebase_groups]
+
+    UI.user_error!("Missing build_number") if build_num.to_s.empty?
+    UI.user_error!("Missing firebase_app_id") if firebase_app_id.to_s.empty?
+
+    increment_version_number(version_number: app_version) unless app_version.empty?
+    increment_build_number(build_number: build_num)
+
+    artifact_name = scheme.to_s.empty? ? "app" : scheme
+    output_path = "./build/#{artifact_name}_#{build_num}.ipa"
+    gym_options = {
+      export_method: "ad-hoc",
+      output_directory: "./build",
+      output_name: "#{artifact_name}_#{build_num}.ipa",
+      clean: true
+    }
+    gym_options[:scheme] = scheme unless scheme.to_s.empty?
+    gym_options[:configuration] = configuration unless configuration.to_s.empty?
+    configure_signing(gym_options)
+
+    gym(**gym_options)
+
+    firebase_app_distribution(
+      app: firebase_app_id,
+      ipa_path: output_path,
+      release_notes: notes,
+      groups: firebase_groups,
+      firebase_cli_token: ENV["FIREBASE_CLI_TOKEN"]
+    )
+  end
+
+  error do |_lane, exception|
+    UI.error("Build failed: #{exception.message}")
+    raise exception
+  end
+end
