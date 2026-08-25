@@ -1,28 +1,15 @@
-import { execFile } from 'node:child_process';
-import fs from 'node:fs/promises';
-import path from 'node:path';
-import { promisify } from 'node:util';
-
 import { z } from 'zod';
 
 import type { Project, ProjectConfigSnapshot } from '../domain/project';
 import { AppError } from '../http/errors';
 import { ProjectRepository } from '../repositories/project-repository';
+import { BundlerService, type BundlerGateway } from './bundler-service';
+import type { RepositoryCandidateResolver } from './repository-discovery-service';
 
-const execFileAsync = promisify(execFile);
 const envReferencePattern = /^[A-Z][A-Z0-9_]*$/;
 const bundleIdPattern = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
+const profileUuidPattern = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
 const envReference = z.string().regex(envReferencePattern);
-const bundleEnvironmentKeys = [
-  'PATH', 'HOME', 'USER', 'SHELL', 'TMPDIR', 'LANG', 'LC_ALL',
-  'GEM_HOME', 'GEM_PATH', 'RUBYOPT', 'RBENV_ROOT',
-];
-
-function createBundleEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return Object.fromEntries(
-    bundleEnvironmentKeys.flatMap((key) => environment[key] ? [[key, environment[key]]] : []),
-  );
-}
 
 const projectConfigSchema = z
   .object({
@@ -46,6 +33,7 @@ const projectConfigSchema = z
         z.object({
           bundleId: z.string().trim().max(255),
           profileName: z.string().trim().max(255),
+          profileUuid: z.string().trim().regex(profileUuidPattern).optional(),
         }),
       )
       .max(50),
@@ -132,17 +120,22 @@ export interface ProjectValidationResult {
   missingEnvironmentVariables?: string[];
 }
 
-function isPathInside(root: string, candidate: string): boolean {
-  const relative = path.relative(root, candidate);
-  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+export interface ProjectValidationOptions {
+  canonicalRepoPath?: string;
+  dependenciesSatisfied?: boolean;
 }
 
 export class ProjectConfigService {
+  private readonly bundler: BundlerGateway;
+
   constructor(
     private readonly projects: ProjectRepository,
-    private readonly allowedRepoRoots: string[],
+    private readonly repositoryDiscovery: RepositoryCandidateResolver,
     private readonly environment: NodeJS.ProcessEnv = process.env,
-  ) {}
+    bundler?: BundlerGateway,
+  ) {
+    this.bundler = bundler ?? new BundlerService(environment);
+  }
 
   async validateAndRecord(projectKey: string): Promise<ProjectValidationResult> {
     const project = this.projects.findByKey(projectKey);
@@ -193,7 +186,7 @@ export class ProjectConfigService {
     };
   }
 
-  async validate(project: Project): Promise<ProjectValidationResult> {
+  async validate(project: Project, options: ProjectValidationOptions = {}): Promise<ProjectValidationResult> {
     const parsed = projectConfigSchema.safeParse(project);
     if (!parsed.success) {
       return {
@@ -202,70 +195,53 @@ export class ProjectConfigService {
       };
     }
 
-    if (this.allowedRepoRoots.length === 0) {
+    if (this.repositoryDiscovery.hasConfiguredRoots?.() === false) {
       return { valid: false, message: 'IOS_REPO_ROOTS is not configured' };
     }
 
-    try {
-      const canonicalRepoPath = await fs.realpath(project.repoPath);
-      const rootResults = await Promise.all(
-        this.allowedRepoRoots.map(async (root) => {
-          try {
-            return await fs.realpath(root);
-          } catch {
-            return null;
-          }
-        }),
-      );
-      const insideAllowedRoot = rootResults.some((root) => root && isPathInside(root, canonicalRepoPath));
-
-      if (!insideAllowedRoot) {
-        return { valid: false, message: 'Repository path is outside IOS_REPO_ROOTS' };
+    let canonicalRepoPath = options.canonicalRepoPath;
+    if (!canonicalRepoPath) {
+      try {
+        canonicalRepoPath = (await this.repositoryDiscovery.resolveCandidate(project.repoPath)).path;
+      } catch (error) {
+        const message = error instanceof AppError
+          ? error.fields?.repoPath?.[0] ?? error.message
+          : 'Repository could not be resolved';
+        return { valid: false, message };
       }
-
-      const stat = await fs.stat(canonicalRepoPath);
-      if (!stat.isDirectory()) {
-        return { valid: false, message: 'Repository path is not a directory' };
-      }
-
-      await Promise.all([
-        fs.access(path.join(canonicalRepoPath, 'Gemfile')),
-        fs.access(path.join(canonicalRepoPath, 'fastlane', 'Fastfile')),
-      ]);
-
-      const references = project.signingMode === 'match'
-        ? [
-            project.firebaseCliTokenEnvVar,
-            project.matchPasswordEnvVar,
-            project.appStoreConnectKeyIdEnvVar,
-            project.appStoreConnectIssuerIdEnvVar,
-            project.appStoreConnectKeyPathEnvVar,
-          ]
-        : [project.firebaseCliTokenEnvVar];
-      const missingEnvironmentVariables = references
-        .filter((value): value is string => Boolean(value))
-        .filter((name) => !this.environment[name]?.trim());
-
-      if (missingEnvironmentVariables.length > 0) {
-        return {
-          valid: false,
-          message: `Missing runner environment variables: ${missingEnvironmentVariables.join(', ')}`,
-          canonicalRepoPath,
-          missingEnvironmentVariables,
-        };
-      }
-
-      await execFileAsync(this.environment.BUNDLE_BIN?.trim() || 'bundle', ['check'], {
-        cwd: canonicalRepoPath,
-        env: createBundleEnvironment(this.environment),
-        timeout: 15_000,
-        maxBuffer: 1024 * 1024,
-      });
-
-      return { valid: true, message: 'Project configuration is valid', canonicalRepoPath };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return { valid: false, message: `Project validation failed: ${message.slice(0, 500)}` };
     }
+
+    const references = project.signingMode === 'match'
+      ? [
+          project.firebaseCliTokenEnvVar,
+          project.matchPasswordEnvVar,
+          project.appStoreConnectKeyIdEnvVar,
+          project.appStoreConnectIssuerIdEnvVar,
+          project.appStoreConnectKeyPathEnvVar,
+        ]
+      : [project.firebaseCliTokenEnvVar];
+    const missingEnvironmentVariables = references
+      .filter((value): value is string => Boolean(value))
+      .filter((name) => !this.environment[name]?.trim());
+
+    if (missingEnvironmentVariables.length > 0) {
+      return {
+        valid: false,
+        message: `Missing runner environment variables: ${missingEnvironmentVariables.join(', ')}`,
+        canonicalRepoPath,
+        missingEnvironmentVariables,
+      };
+    }
+
+    const dependenciesSatisfied = options.dependenciesSatisfied ?? await this.bundler.check(canonicalRepoPath);
+    if (!dependenciesSatisfied) {
+      return {
+        valid: false,
+        message: 'Project dependencies are not installed. Run Setup & Validate.',
+        canonicalRepoPath,
+      };
+    }
+
+    return { valid: true, message: 'Project configuration is valid', canonicalRepoPath };
   }
 }

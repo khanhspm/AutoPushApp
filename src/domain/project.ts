@@ -4,6 +4,7 @@ export type SigningMode = 'manual' | 'match';
 export interface ProvisioningProfileMapping {
   bundleId: string;
   profileName: string;
+  profileUuid?: string;
 }
 
 export interface ProjectRow {

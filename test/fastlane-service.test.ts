@@ -1,3 +1,6 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { ProjectConfigSnapshotV1, ProjectConfigSnapshotV2 } from '../src/domain/project';
@@ -32,7 +35,7 @@ describe('Fastlane signing environment', () => {
       appleTeamId: 'AB12CDEFGH',
       signingCertificate: 'Apple Distribution',
       provisioningProfiles: [
-        { bundleId: 'com.example.app', profileName: 'Example App AdHoc' },
+        { bundleId: 'com.example.app', profileName: 'Example App AdHoc', profileUuid: '11111111-1111-4111-8111-111111111111' },
         { bundleId: 'com.example.app.widget', profileName: 'Example Widget AdHoc' },
       ],
       secretEnvRefs: {
@@ -59,6 +62,13 @@ describe('Fastlane signing environment', () => {
     expect(result.childEnv.APP_STORE_CONNECT_API_KEY_ID).toBeUndefined();
     expect(result.childEnv.BUNDLE_GEMFILE).toBeUndefined();
     expect(result.secretValues).toEqual(['firebase-secret']);
+  });
+
+  it('keeps manual export mappings on profile names instead of UUIDs', async () => {
+    const template = await fs.readFile(path.resolve('fastlane/Fastfile.example'), 'utf8');
+
+    expect(template).toContain('profiles[bundle_id] = profile_name');
+    expect(template).not.toContain('profile_uuid.empty? ? profile_name : profile_uuid');
   });
 
   it('treats V1 snapshots as Match signing', () => {

@@ -17,6 +17,8 @@ import { getWorkerHeartbeat } from './queue/worker-heartbeat';
 import { buildRoutes } from './routes/builds';
 import { dashboardRoutes } from './routes/dashboard';
 import { projectRoutes } from './routes/projects';
+import { repositoryRoutes } from './routes/repositories';
+import { signingRoutes } from './routes/signing';
 import { userRoutes } from './routes/users';
 import { logger } from './utils/logger';
 import { createLarkWebhookHandler } from './webhook/lark-handler';
@@ -56,6 +58,16 @@ export async function buildApp(context: AppContext) {
     }
 
     const code = (error as { code?: string }).code;
+    if (code === 'FST_ERR_CTP_BODY_TOO_LARGE') {
+      return reply.code(413).send({
+        error: { code: 'PAYLOAD_TOO_LARGE', message: 'Request payload is too large' },
+      });
+    }
+    if (code === 'FST_ERR_CTP_INVALID_MEDIA_TYPE') {
+      return reply.code(415).send({
+        error: { code: 'UNSUPPORTED_MEDIA_TYPE', message: 'Request content type is not supported' },
+      });
+    }
     if (code?.startsWith('SQLITE_CONSTRAINT')) {
       return reply.code(409).send({
         error: { code: 'RESOURCE_CONFLICT', message: 'The requested resource conflicts with existing data' },
@@ -100,12 +112,14 @@ export async function buildApp(context: AppContext) {
   const authenticateAdmin = createAdminAuthHook(env.CMS_ADMIN_TOKEN);
   await app.register(
     async (cms) => {
-      cms.addHook('preHandler', authenticateAdmin);
+      cms.addHook('onRequest', authenticateAdmin);
       cms.get('/session', async () => ({ authenticated: true }));
       await cms.register(dashboardRoutes(context), { prefix: '/dashboard' });
       await cms.register(projectRoutes(context), { prefix: '/projects' });
       await cms.register(userRoutes(context), { prefix: '/users' });
       await cms.register(buildRoutes(context), { prefix: '/builds' });
+      await cms.register(repositoryRoutes(context), { prefix: '/repositories' });
+      await cms.register(signingRoutes(context), { prefix: '/signing' });
     },
     { prefix: '/api' },
   );

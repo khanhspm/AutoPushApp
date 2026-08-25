@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildTriggerSchema, parseTesterGroups, projectFormSchema, userFormSchema } from './validation'
+import { buildTriggerSchema, isConcreteBundleId, parseTesterGroups, projectFormSchema, userFormSchema } from './validation'
 
 describe('frontend form validation', () => {
   it('rejects missing project delivery settings and unsafe env references', () => {
@@ -13,6 +13,17 @@ describe('frontend form validation', () => {
       expect(result.error.flatten().fieldErrors.repoPath).toBeDefined()
       expect(result.error.flatten().fieldErrors.firebaseCliTokenEnvVar).toBeDefined()
     }
+  })
+
+  it('recognizes only concrete dotted bundle IDs for signing discovery', () => {
+    expect(isConcreteBundleId(' com.example.app ')).toBe(true)
+    expect(isConcreteBundleId('com.example.app-widget')).toBe(true)
+    expect(isConcreteBundleId('com.example.*')).toBe(false)
+    expect(isConcreteBundleId('*.example.app')).toBe(false)
+    expect(isConcreteBundleId('com.example')).toBe(true)
+    expect(isConcreteBundleId('com')).toBe(false)
+    expect(isConcreteBundleId('com..example')).toBe(false)
+    expect(isConcreteBundleId('com.example_app')).toBe(false)
   })
 
   it('accepts multiple manual profile mappings while ignoring inactive Match references', () => {

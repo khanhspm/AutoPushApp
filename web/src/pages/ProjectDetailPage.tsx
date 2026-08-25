@@ -20,7 +20,13 @@ export function ProjectDetailPage() {
   useEffect(() => {
     setScheme(project.data?.scheme ?? '')
   }, [project.data?.projectKey])
-  const validate = useMutation({ mutationFn: () => api.validateProject(projectKey), onSuccess: () => queryClient.invalidateQueries({ queryKey: ['projects', projectKey] }) })
+  const setup = useMutation({
+    mutationFn: () => api.setupAndValidateProject(projectKey),
+    onSuccess: (result) => {
+      queryClient.setQueryData(['projects', projectKey], result.project)
+      void queryClient.invalidateQueries({ queryKey: ['projects'] })
+    },
+  })
   const trigger = useMutation({ mutationFn: (input: { appVersion: string; scheme: string; buildNumber: string; releaseNotes?: string }) => api.triggerBuild(projectKey, input), onSuccess: (build) => navigate(`/builds/${build.id}`) })
   const remove = useMutation({ mutationFn: () => api.deleteProject(projectKey), onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ['projects'] }); navigate('/projects', { replace: true }) } })
 
@@ -32,6 +38,9 @@ export function ProjectDetailPage() {
   if (project.isLoading) return <LoadingState label="Loading project" />
   if (project.isError || !project.data) return <ErrorState error={project.error} onRetry={() => project.refetch()} />
   const data = project.data
+  const validation = setup.data?.validation
+  const validationValid = validation?.valid ?? data.validationStatus === 'valid'
+  const validationMessage = validation?.message || data.validationMessage || 'Configure Bundler dependencies, then validate repository access and runner environment variables.'
 
   return <div className="page-stack">
     <div className="breadcrumb"><Link to="/projects">Projects</Link><span>/</span><span>{data.displayName}</span></div>
@@ -47,7 +56,7 @@ export function ProjectDetailPage() {
             <label className="field"><span className="field-label">Release notes <small>Optional</small></span><input className="input" value={releaseNotes} onChange={(e) => setReleaseNotes(e.target.value)} placeholder="What changed in this build" /></label>
             <button className="button button-primary" disabled={!data.enabled || trigger.isPending}>{trigger.isPending ? 'Queuing…' : 'Queue build'}</button>
           </form>
-          {!data.enabled && <p className="form-note warning-text">Validate and enable this project before triggering builds.</p>}
+          {!data.enabled && <p className="form-note warning-text">Run Setup &amp; Validate, then enable this project before triggering builds.</p>}
           {trigger.isError && <div className="inline-alert" role="alert">{trigger.error.message}</div>}
         </article>
         <article className="panel"><div className="panel-header"><div><p className="panel-kicker">Runner inputs</p><h2>Build configuration</h2></div></div><dl className="definition-grid">
@@ -66,11 +75,13 @@ export function ProjectDetailPage() {
         </dl></article>
       </div>
       <aside className="page-stack-small">
-        <article className="panel validation-card">
-          <div className="validation-heading"><div className={`validation-icon ${validate.data?.valid || data.validationStatus === 'valid' ? 'valid' : ''}`}>{validate.data?.valid || data.validationStatus === 'valid' ? '✓' : '?'}</div><div><h2>Configuration check</h2><p>{validate.data?.message || data.validationMessage || 'Validate repository access, required files, and runner environment variables.'}</p></div></div>
-          {validate.data?.missingEnvironmentVariables?.length ? <div className="inline-alert">Missing: {validate.data.missingEnvironmentVariables.join(', ')}</div> : null}
-          <button className="button button-secondary button-block" onClick={() => validate.mutate()} disabled={validate.isPending}>{validate.isPending ? 'Validating…' : 'Run validation'}</button>
-          {validate.isError && <p className="field-error">{validate.error.message}</p>}
+        <article className="panel validation-card" aria-busy={setup.isPending}>
+          <div className="validation-heading"><div className={`validation-icon ${validationValid ? 'valid' : ''}`}>{validationValid ? '✓' : '?'}</div><div><h2>Setup &amp; validation</h2><p>{validationMessage}</p></div></div>
+          {validation?.missingEnvironmentVariables?.length ? <div className="inline-alert">Missing: {validation.missingEnvironmentVariables.join(', ')}</div> : null}
+          {setup.isPending && <p className="form-note">Configuring Bundler and installing missing dependencies. This can take several minutes.</p>}
+          {setup.isSuccess && <p className="form-note">{setup.data.dependenciesInstalled ? 'Dependencies installed in vendor/bundle.' : 'Dependencies were already installed.'}</p>}
+          <button className="button button-secondary button-block" onClick={() => setup.mutate()} disabled={setup.isPending}>{setup.isPending ? 'Setting up & validating…' : 'Setup & Validate'}</button>
+          {setup.isError && <p className="field-error">{setup.error.message}</p>}
         </article>
         <article className="panel compact-panel"><h3>Project metadata</h3><dl className="metadata-list"><div><dt>Version</dt><dd>{data.version}</dd></div><div><dt>Created</dt><dd>{formatDateTime(data.createdAt)}</dd></div><div><dt>Updated</dt><dd>{formatDateTime(data.updatedAt)}</dd></div><div><dt>Last validated</dt><dd>{formatDateTime(data.validatedAt)}</dd></div></dl></article>
       </aside>

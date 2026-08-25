@@ -17,6 +17,7 @@ function normalizeProvisioningProfiles(profiles: ProvisioningProfileMapping[] = 
   return profiles.map((profile) => ({
     bundleId: profile.bundleId.trim(),
     profileName: profile.profileName.trim(),
+    ...(profile.profileUuid?.trim() ? { profileUuid: profile.profileUuid.trim() } : {}),
   }));
 }
 

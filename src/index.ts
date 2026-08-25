@@ -8,7 +8,13 @@ import { ProjectRepository } from './repositories/project-repository';
 import { UserRepository } from './repositories/user-repository';
 import { BuildLogService } from './services/build-log-service';
 import { BuildRequestService } from './services/build-request-service';
+import { BundlerService } from './services/bundler-service';
 import { ProjectConfigService } from './services/project-config-service';
+import { ProjectSetupService } from './services/project-setup-service';
+import { RepositoryFolderChooserService } from './services/repository-folder-chooser-service';
+import { RepositoryDiscoveryService } from './services/repository-discovery-service';
+import { SigningDiscoveryService } from './services/signing-discovery-service';
+import { SigningProfileChooserService } from './services/signing-profile-chooser-service';
 import { logger } from './utils/logger';
 
 export function createAppContext(): AppContext {
@@ -18,7 +24,10 @@ export function createAppContext(): AppContext {
   const projects = new ProjectRepository(database);
   const users = new UserRepository(database);
   const builds = new BuildRepository(database);
-  const projectConfig = new ProjectConfigService(projects, env.IOS_REPO_ROOTS);
+  const repositoryDiscovery = new RepositoryDiscoveryService(env.IOS_REPO_ROOTS);
+  const bundler = new BundlerService();
+  const projectConfig = new ProjectConfigService(projects, repositoryDiscovery, process.env, bundler);
+  const projectSetup = new ProjectSetupService(projects, repositoryDiscovery, bundler, projectConfig);
   const logs = new BuildLogService(env.LOG_DIR);
   const buildRequests = new BuildRequestService(builds, users, projectConfig, queue);
 
@@ -30,8 +39,13 @@ export function createAppContext(): AppContext {
     users,
     builds,
     projectConfig,
+    projectSetup,
     buildRequests,
     logs,
+    repositoryDiscovery,
+    repositoryFolderChooser: new RepositoryFolderChooserService(),
+    signingDiscovery: new SigningDiscoveryService(),
+    signingProfileChooser: new SigningProfileChooserService(),
   };
 }
 
