@@ -13,6 +13,7 @@ const nullableLarkChatId = z.preprocess(
   z.string().trim().max(200).regex(/^oc_[A-Za-z0-9_-]+$/, 'Use a Lark group chat ID beginning with oc_').nullable().optional(),
 );
 const projectKeySchema = z.string().trim().min(1).max(80).regex(/^[A-Za-z0-9_.-]+$/);
+const profileUuidSchema = z.string().trim().regex(/^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i);
 const bundleIdSchema = z
   .string()
   .trim()
@@ -22,12 +23,13 @@ const bundleIdSchema = z
 const provisioningProfileSchema = z.object({
   bundleId: z.string().trim().max(255),
   profileName: z.string().trim().max(255),
+  profileUuid: profileUuidSchema.optional(),
 });
 
 const projectShape = {
   projectKey: projectKeySchema,
   displayName: z.string().trim().min(1).max(120),
-  repoPath: z.string().trim().min(1).max(1000),
+  repoPath: z.string().max(1000).refine((value) => value.trim().length > 0),
   fastlaneLane: z.string().trim().min(1).max(80),
   scheme: nullableText,
   buildConfiguration: nullableText,
@@ -54,7 +56,7 @@ function validateManualSigning(
     signingMode?: 'manual' | 'match';
     appleTeamId?: string | null;
     signingCertificate?: string;
-    provisioningProfiles?: Array<{ bundleId: string; profileName: string }>;
+    provisioningProfiles?: Array<{ bundleId: string; profileName: string; profileUuid?: string }>;
   },
   context: z.RefinementCtx,
 ): void {
@@ -104,12 +106,19 @@ const buildBodySchema = z.object({
 });
 
 function applySigningDefaults<T extends ProjectInput | ProjectUpdateInput>(input: T, current?: Project): T {
+  const provisioningProfiles = (input.provisioningProfiles ?? current?.provisioningProfiles ?? []).map((profile) => {
+    if (profile.profileUuid || !current) return profile;
+    const existing = current.provisioningProfiles.find((candidate) => (
+      candidate.bundleId === profile.bundleId && candidate.profileName === profile.profileName
+    ));
+    return existing?.profileUuid ? { ...profile, profileUuid: existing.profileUuid } : profile;
+  });
   return {
     ...input,
     signingMode: input.signingMode ?? current?.signingMode ?? 'match',
     appleTeamId: input.appleTeamId === undefined ? (current?.appleTeamId ?? null) : input.appleTeamId,
     signingCertificate: input.signingCertificate ?? current?.signingCertificate ?? 'Apple Distribution',
-    provisioningProfiles: input.provisioningProfiles ?? current?.provisioningProfiles ?? [],
+    provisioningProfiles,
     larkNotificationChatId: input.larkNotificationChatId === undefined
       ? (current?.larkNotificationChatId ?? null)
       : input.larkNotificationChatId,
@@ -130,7 +139,9 @@ export function projectRoutes(context: AppContext): FastifyPluginAsync {
     app.get('/', async () => ({ projects: context.projects.list() }));
 
     app.post('/', async (request, reply) => {
-      const input = applySigningDefaults(projectBodySchema.parse(request.body));
+      const parsedInput = applySigningDefaults(projectBodySchema.parse(request.body));
+      const repository = await context.repositoryDiscovery.resolveCandidate(parsedInput.repoPath);
+      const input = { ...parsedInput, repoPath: repository.path };
       let project = context.projects.create(input);
       let validation = null;
 
@@ -166,7 +177,14 @@ export function projectRoutes(context: AppContext): FastifyPluginAsync {
         throw new AppError(404, 'PROJECT_NOT_FOUND', 'Project was not found');
       }
 
-      const input = applySigningDefaults(projectUpdateSchema.parse(request.body), current);
+      const parsedInput = applySigningDefaults(projectUpdateSchema.parse(request.body), current);
+      const keepUnresolvedLegacyPath = !parsedInput.enabled && parsedInput.repoPath === current.repoPath;
+      const input = keepUnresolvedLegacyPath
+        ? { ...parsedInput, repoPath: current.repoPath }
+        : {
+            ...parsedInput,
+            repoPath: (await context.repositoryDiscovery.resolveCandidate(parsedInput.repoPath)).path,
+          };
       let project = context.projects.update(projectKey, input);
       if (!project) {
         if (!context.projects.findByKey(projectKey)) {
@@ -204,6 +222,17 @@ export function projectRoutes(context: AppContext): FastifyPluginAsync {
       const projectKey = projectKeySchema.parse((request.params as { projectKey: string }).projectKey);
       const validation = await context.projectConfig.validateAndRecord(projectKey);
       return { validation, project: context.projects.findByKey(projectKey) };
+    });
+
+    app.post('/:projectKey/setup-and-validate', async (request) => {
+      const projectKey = projectKeySchema.parse((request.params as { projectKey: string }).projectKey);
+      z.undefined().parse(request.body);
+      const result = await context.projectSetup.setupAndValidate(projectKey);
+      return {
+        setup: { dependenciesInstalled: result.dependenciesInstalled },
+        validation: result.validation,
+        project: result.project,
+      };
     });
 
     app.post('/:projectKey/builds', async (request, reply) => {

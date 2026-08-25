@@ -5,6 +5,62 @@ export type SigningMode = 'manual' | 'match'
 export interface ProvisioningProfileMapping {
   bundleId: string
   profileName: string
+  profileUuid?: string
+}
+
+export interface SigningDiscoveryWarning {
+  code: string
+  message: string
+}
+
+export type SigningCertificateKind = 'distribution' | 'development' | 'other'
+
+export interface SigningCertificateCandidate {
+  name: string
+  sha1Fingerprint: string
+  kind: SigningCertificateKind
+}
+
+export interface SigningProfileCandidate {
+  profileName: string
+  uuid: string
+  teamId: string
+  teamName: string | null
+  expiresAt: string
+  certificateCandidates: SigningCertificateCandidate[]
+  recommendedCertificate: SigningCertificateCandidate | null
+  warnings: SigningDiscoveryWarning[]
+}
+
+export interface SigningDiscoveryResult {
+  bundleId: string
+  profiles: SigningProfileCandidate[]
+  warnings: SigningDiscoveryWarning[]
+}
+
+export interface SigningProfileImportResult extends SigningDiscoveryResult {
+  importedProfileUuid: string
+}
+
+export interface RepositoryDiscoveryWarning {
+  code: string
+  message: string
+  rootPath?: string
+}
+
+export interface RepositoryCandidate {
+  path: string
+  name: string
+  rootPath: string
+  relativePath: string
+  displayLabel: string
+  hasGit: boolean
+}
+
+export interface RepositoryDiscoveryResult {
+  repositories: RepositoryCandidate[]
+  warnings: RepositoryDiscoveryWarning[]
+  truncated: boolean
 }
 
 export interface Session {
@@ -71,6 +127,12 @@ export interface ProjectValidation {
   message?: string
   canonicalRepoPath?: string
   missingEnvironmentVariables?: string[]
+}
+
+export interface ProjectSetupResult {
+  dependenciesInstalled: boolean
+  validation: ProjectValidation
+  project: Project
 }
 
 export interface User {

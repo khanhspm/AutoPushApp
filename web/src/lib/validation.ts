@@ -8,11 +8,16 @@ const optionalLarkChatId = z.string().trim().max(200).optional().refine(
   'Use a Lark group chat ID beginning with oc_',
 ).transform((value) => value || undefined)
 const bundleIdPattern = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/
+const profileUuidPattern = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i
+
+export function isConcreteBundleId(value: string): boolean {
+  return bundleIdPattern.test(value.trim())
+}
 
 export const projectFormSchema = z.object({
   projectKey: z.string().trim().min(1, 'Project key is required').max(80).regex(/^[A-Za-z0-9_.-]+$/, 'Use letters, numbers, dots, hyphens, or underscores'),
   displayName: z.string().trim().min(1, 'Display name is required').max(120),
-  repoPath: z.string().trim().min(1, 'Repository path is required').max(1000),
+  repoPath: z.string().max(1000).refine((value) => value.trim().length > 0, 'Select a repository'),
   fastlaneLane: z.string().trim().min(1, 'Fastlane lane is required').max(80).regex(/^[A-Za-z0-9_.-]+$/, 'Use a valid Fastlane lane name'),
   scheme: optionalText,
   buildConfiguration: optionalText,
@@ -29,6 +34,7 @@ export const projectFormSchema = z.object({
   provisioningProfiles: z.array(z.object({
     bundleId: z.string().trim().max(255),
     profileName: z.string().trim().max(255),
+    profileUuid: z.string().trim().regex(profileUuidPattern).optional(),
   })).max(50),
   larkNotificationChatId: optionalLarkChatId,
   enabled: z.boolean(),
@@ -55,7 +61,7 @@ export const projectFormSchema = z.object({
 
   const seen = new Set<string>()
   project.provisioningProfiles.forEach((profile, index) => {
-    if (profile.bundleId && !bundleIdPattern.test(profile.bundleId)) {
+    if (profile.bundleId && !isConcreteBundleId(profile.bundleId)) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ['provisioningProfiles', index, 'bundleId'], message: 'Use a concrete bundle ID without wildcards' })
     }
     const key = profile.bundleId.toLowerCase()

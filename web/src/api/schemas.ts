@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { Build, BuildDetail, BuildListResult, DashboardData, Project, ProjectValidation, Session, User } from '../types'
+import type { Build, BuildDetail, BuildListResult, DashboardData, Project, ProjectSetupResult, ProjectValidation, RepositoryCandidate, RepositoryDiscoveryResult, Session, SigningDiscoveryResult, SigningProfileImportResult, User } from '../types'
 
 const unknownObject = z.object({}).passthrough()
 const recordSchema = z.record(z.unknown())
@@ -49,6 +49,7 @@ export function parseProject(value: unknown): Project {
     ? profileValues.map((value) => object(value)).map((profile) => ({
         bundleId: stringValue(profile.bundleId ?? profile.bundle_id),
         profileName: stringValue(profile.profileName ?? profile.profile_name),
+        profileUuid: optionalString(profile.profileUuid ?? profile.profile_uuid),
       }))
     : []
   return {
@@ -84,6 +85,72 @@ export function parseProjects(value: unknown): Project[] {
   return z.array(z.unknown()).parse(unwrap(value, ['projects', 'items', 'data'])).map(parseProject)
 }
 
+const signingDiscoveryWarningSchema = z.object({
+  code: z.string().trim().min(1),
+  message: z.string().trim().min(1),
+}).strict()
+const signingCertificateCandidateSchema = z.object({
+  name: z.string().trim().min(1),
+  sha1Fingerprint: z.string().regex(/^[A-F0-9]{40}$/),
+  kind: z.enum(['distribution', 'development', 'other']),
+}).strict()
+const signingProfileCandidateSchema = z.object({
+  profileName: z.string().trim().min(1),
+  uuid: z.string().trim().min(1),
+  teamId: z.string().trim().min(1),
+  teamName: z.string().trim().min(1).nullable(),
+  expiresAt: z.string().datetime(),
+  certificateCandidates: z.array(signingCertificateCandidateSchema),
+  recommendedCertificate: signingCertificateCandidateSchema.nullable(),
+  warnings: z.array(signingDiscoveryWarningSchema),
+}).strict()
+const signingDiscoverySchema = z.object({
+  bundleId: z.string().trim().min(1),
+  profiles: z.array(signingProfileCandidateSchema),
+  warnings: z.array(signingDiscoveryWarningSchema),
+}).strict()
+
+export function parseSigningDiscovery(value: unknown): SigningDiscoveryResult {
+  return signingDiscoverySchema.parse(value)
+}
+
+const signingProfileImportSchema = signingDiscoverySchema.extend({
+  importedProfileUuid: z.string().trim().min(1),
+}).strict()
+
+export function parseSigningProfileImport(value: unknown): SigningProfileImportResult {
+  return signingProfileImportSchema.parse(value)
+}
+
+const absolutePathSchema = z.string().min(1).refine((value) => value.startsWith('/'), 'Expected an absolute path')
+const repositoryWarningSchema = z.object({
+  code: z.string().trim().min(1),
+  message: z.string().trim().min(1),
+  rootPath: absolutePathSchema.optional(),
+}).strict()
+const repositoryCandidateSchema = z.object({
+  path: absolutePathSchema,
+  name: z.string().trim().min(1),
+  rootPath: absolutePathSchema,
+  relativePath: z.string().trim(),
+  displayLabel: z.string().trim().min(1),
+  hasGit: z.boolean(),
+}).strict()
+const repositoryDiscoverySchema = z.object({
+  repositories: z.array(repositoryCandidateSchema),
+  warnings: z.array(repositoryWarningSchema),
+  truncated: z.boolean(),
+}).strict()
+const repositoryChoiceSchema = z.object({ repository: repositoryCandidateSchema }).strict()
+
+export function parseRepositoryDiscovery(value: unknown): RepositoryDiscoveryResult {
+  return repositoryDiscoverySchema.parse(value)
+}
+
+export function parseRepositoryChoice(value: unknown): RepositoryCandidate {
+  return repositoryChoiceSchema.parse(value).repository
+}
+
 export function parseProjectValidation(value: unknown): ProjectValidation {
   const raw = object(unwrap(value, ['validation', 'data']))
   return {
@@ -91,6 +158,16 @@ export function parseProjectValidation(value: unknown): ProjectValidation {
     message: optionalString(raw.message),
     canonicalRepoPath: optionalString(raw.canonicalRepoPath),
     missingEnvironmentVariables: Array.isArray(raw.missingEnvironmentVariables) ? raw.missingEnvironmentVariables.map(String) : undefined,
+  }
+}
+
+export function parseProjectSetup(value: unknown): ProjectSetupResult {
+  const raw = object(value)
+  const setup = object(raw.setup)
+  return {
+    dependenciesInstalled: booleanValue(setup.dependenciesInstalled),
+    validation: parseProjectValidation(raw.validation),
+    project: parseProject(raw.project),
   }
 }
 

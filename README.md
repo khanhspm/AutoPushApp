@@ -511,7 +511,13 @@ Ví dụ nhiều repo root:
 IOS_REPO_ROOTS=/Users/build/Projects/iOS,/Volumes/BuildRepos
 ```
 
-`IOS_REPO_ROOTS` là boundary bảo mật. Backend resolve canonical `realpath` và từ chối repository nằm ngoài các root này, kể cả trường hợp symlink escape.
+`IOS_REPO_ROOTS` là boundary bảo mật cho repository picker và project persistence. Backend resolve canonical `realpath`, chỉ cho lưu directory nằm trong các root này và từ chối symlink escape. Khi chọn hoặc lưu một directory hợp lệ, backend tự tạo các file Fastlane còn thiếu bằng template chuẩn mà không ghi đè file đã tồn tại.
+
+Nút **Choose folder…** gọi native macOS folder dialog bằng API process. Dialog xuất hiện trên desktop của máy Mac chạy API, không phải tùy ý trên máy đang mở browser. API phải chạy trong interactive GUI session; headless host, container hoặc launch daemon không có WindowServer sẽ không mở được dialog. Browser không cung cấp trustworthy absolute local path nên CMS không dùng `<input webkitdirectory>` để tạo `repoPath`.
+
+Endpoint discovery cũ vẫn scan tối đa 4 cấp, 2.000 directory và trả tối đa 200 repository cho compatibility/diagnostics, nhưng Add/Edit Project không còn phụ thuộc vào danh sách scan này.
+
+Repository được chọn phản ánh filesystem của **API process**. Nếu API và worker chạy khác máy/container, worker phải mount repository tại cùng canonical absolute path; dùng chung Redis/SQLite nhưng khác filesystem là chưa đủ.
 
 Nếu `bundle` đúng không nằm trong service `PATH`, tìm path:
 
@@ -750,12 +756,11 @@ Apple thường chỉ cho download `.p8` một lần. Phải backup vào secret 
 
 Manual mode không cần Match password hoặc ASC key env. Thay vào đó:
 
-1. Import Apple Distribution certificate **kèm private key** vào keychain của đúng macOS user chạy worker.
-2. Cài provisioning profiles cho app và mọi extension được archive.
-3. Xác định Apple Team ID 10 ký tự.
-4. Xác định certificate label, mặc định thường là `Apple Distribution`.
-5. Xác định tên profile bên trong từng `.mobileprovision`.
-6. Trên CMS map từng concrete Bundle ID tới profile name.
+1. Import Apple Distribution certificate **kèm private key** vào keychain của đúng macOS user chạy API/worker.
+2. Với profile đã cài, nhập concrete Bundle ID rồi chọn **Auto detect**.
+3. Với profile chưa cài, chọn **Choose .mobileprovision…**. Native file dialog mở trên máy Mac chạy API; chọn một file `.mobileprovision`. CMS validate file, cài dưới UUID của profile rồi tự detect/apply đúng profile vừa import. Bundle ID có thể để trống để lấy từ profile.
+4. Nếu chỉ có một certificate distribution phù hợp trong keychain, CMS tự điền profile name, Apple Team ID và SHA-1 certificate tương ứng.
+5. Nếu có nhiều profile/certificate phù hợp, chọn đúng candidate được hiển thị; mọi trường vẫn có thể chỉnh sửa thủ công.
 
 Ví dụ:
 
@@ -765,7 +770,9 @@ com.company.customerapp.Notification    -> Customer Notification AdHoc
 com.company.customerapp.Widget          -> Customer Widget AdHoc
 ```
 
-Không dùng wildcard Bundle ID. CMS không tự import certificate/profile và không tự sửa signing settings trong `.xcodeproj`.
+Discovery chỉ đọc profile chưa hết hạn trong `~/Library/MobileDevice/Provisioning Profiles` và identity có private key trong keychain. Profile import cũng cài vào directory của **macOS user chạy API**. API và worker nên chạy cùng máy/cùng user; nếu khác máy/user thì discovery/import không đảm bảo phản ánh signing assets của worker.
+
+Profile import chỉ cài `.mobileprovision`; nó **không** import certificate hoặc private key. Existing profile có cùng UUID không bị ghi đè. CMS lưu cả profile name và UUID đã detect/import; `Fastfile.example` ưu tiên UUID để phân biệt các profile trùng tên, rồi fallback về name cho project cũ. Không dùng wildcard Bundle ID. CMS không tự sửa signing settings trong `.xcodeproj`; khi không tìm thấy identity phù hợp vẫn có thể nhập certificate thủ công.
 
 ---
 
@@ -814,12 +821,17 @@ Nếu worker chưa chạy, phần runner có thể báo chưa sẵn sàng; đi�
 
 ## 8. Chuẩn bị iOS repository và Fastlane
 
-Mỗi iOS repository phải nằm dưới một root trong `IOS_REPO_ROOTS` và có:
+Mỗi iOS repository phải nằm dưới một root trong `IOS_REPO_ROOTS`. Khi repository được chọn hoặc resolve lần đầu, AutoPushApp tự tạo các file còn thiếu:
 
 ```text
 <ios-repo>/Gemfile
 <ios-repo>/fastlane/Fastfile
+<ios-repo>/fastlane/Pluginfile
 ```
+
+Nội dung được copy từ `Gemfile`, `fastlane/Fastfile.example` và `fastlane/Pluginfile` của AutoPushApp. File đã tồn tại được giữ nguyên; backend dùng thao tác no-clobber và không ghi đè cấu hình Fastlane tùy chỉnh. Background repository discovery vẫn chỉ đọc và chỉ liệt kê các repository đã có `Gemfile` cùng `fastlane/Fastfile`.
+
+Việc tạo file không chạy Bundler hoặc Fastlane. Nếu repo vừa được khởi tạo, tiếp tục cài Ruby dependencies trước khi validation.
 
 ### 8.1. Cài Ruby dependencies trong iOS repo
 
@@ -833,7 +845,7 @@ AutoPushApp validation chạy `bundle check` với timeout 15 giây. Nếu `bund
 
 ### 8.2. Fastlane plugin
 
-Fastfile mẫu sử dụng Firebase App Distribution plugin. iOS repo phải có Gemfile/Pluginfile phù hợp và `bundle install` thành công.
+Fastfile mẫu sử dụng Firebase App Distribution plugin. AutoPushApp tạo Gemfile/Pluginfile chuẩn khi cần, nhưng `bundle install` vẫn phải chạy thành công trong iOS repo.
 
 Tham khảo các file trong AutoPushApp:
 
@@ -842,7 +854,7 @@ Tham khảo các file trong AutoPushApp:
 - `fastlane/Matchfile.example`
 - `fastlane/Pluginfile`
 
-Copy/adapt các file mẫu vào **từng iOS repository**; không giả định mọi project có cùng workspace, project hoặc scheme.
+Các file thiếu được copy tự động; sau đó có thể adapt cấu hình trong **từng iOS repository**. AutoPushApp không giả định mọi project có cùng workspace, project hoặc scheme và không ghi đè file đã có.
 
 ### 8.3. Wrapper contract
 
@@ -929,9 +941,11 @@ Khuyến nghị tạo project lần đầu ở trạng thái **disabled**, hoàn
 | --- | --- |
 | Project key | ID ổn định, ví dụ `customer-ios`; chỉ dùng chữ, số, `_`, `.`, `-` |
 | Display name | Tên hiển thị, ví dụ `Customer iOS` |
-| Repository path | Absolute path trên runner, ví dụ `/Users/build/repos/customer-ios` |
+| Repository | Chọn **Choose folder…** rồi chọn checkout trên máy Mac chạy API |
 
-Repository path phải tồn tại và canonical path phải nằm dưới `IOS_REPO_ROOTS`.
+Native dialog mở trên desktop của API host. Sau khi chọn, backend chỉ chấp nhận canonical directory nằm dưới `IOS_REPO_ROOTS`; `.git` không bắt buộc. Nếu thiếu, backend tự tạo `Gemfile`, `fastlane/Fastfile` và supporting `fastlane/Pluginfile` mà không ghi đè file đã có. CMS không có editable arbitrary-path fallback.
+
+Nếu một project cũ đang dùng repository không còn khả dụng, CMS vẫn hiển thị saved path để có thể lưu các thay đổi không liên quan khi project tiếp tục disabled. Muốn đổi repo hoặc enable project phải chọn/khôi phục một repository hợp lệ.
 
 #### Nhóm 02 — Build settings
 
@@ -1004,8 +1018,8 @@ Sau khi tạo project:
    - `IOS_REPO_ROOTS` đã cấu hình.
    - Repository canonical path nằm trong allowed roots.
    - Repo path là directory.
-   - Có `Gemfile`.
-   - Có `fastlane/Fastfile`.
+   - Tự tạo `Gemfile`, `fastlane/Fastfile` và `fastlane/Pluginfile` nếu scaffold chính còn thiếu.
+   - Các marker sau khởi tạo là regular files an toàn.
    - Required env values tồn tại.
    - `bundle check` thành công.
 4. Sửa tất cả lỗi được hiển thị.
@@ -1453,12 +1467,27 @@ IOS_REPO_ROOTS=/Users/build/repos
 
 Restart API và worker sau khi đổi env.
 
-### `Repository path is outside IOS_REPO_ROOTS`
+### Native repository dialog không mở
 
-- Kiểm tra absolute repo path.
-- Kiểm tra symlink/canonical path.
-- Thêm đúng parent root vào `IOS_REPO_ROOTS` hoặc chuyển checkout vào allowed root.
+- Dialog mở trên máy Mac chạy API, không phải trên một browser remote.
+- API phải chạy dưới user có interactive GUI login/WindowServer; headless host, container hoặc launch daemon thường không mở được dialog.
+- Kiểm tra API process có quyền chạy `/usr/bin/osascript`.
+- Chỉ một dialog được mở cùng lúc; đóng/cancel dialog hiện tại trước khi thử lại.
+
+### Repository được chọn nhưng bị từ chối
+
+- Canonical path phải là directory nằm dưới một root trong `IOS_REPO_ROOTS`.
+- API user phải có quyền tạo các Fastlane file còn thiếu trong repository.
+- `fastlane` không được là symlink hoặc non-directory khi backend cần khởi tạo scaffold; marker file không được là directory/symlink không an toàn.
+- Symlink escape của repository ra ngoài allowed root bị từ chối.
+- Nếu API và worker tách host/container, mount repository tại cùng absolute path trên cả hai bên.
 - Không thêm `/` hoặc home directory quá rộng chỉ để bỏ qua boundary.
+
+Nếu scaffold vừa được tạo, chạy `bundle install` trong repository. AutoPushApp không tự tải Ruby gems và validation vẫn yêu cầu `bundle check` thành công.
+
+### Saved repository không còn khả dụng
+
+Project disabled có thể giữ nguyên saved path khi sửa field khác. Để đổi repository hoặc enable lại project, khôi phục/mount repository dưới `IOS_REPO_ROOTS` hoặc chọn lại một folder hợp lệ.
 
 ### `Missing runner environment variables: ...`
 
@@ -1506,6 +1535,17 @@ Mở Build Detail và download full log. Kiểm tra lần lượt:
 - ASC Key ID/Issuer ID/path `.p8`.
 - Certificate/private key và provisioning profiles.
 - Firebase App ID/token/groups.
+
+### Import `.mobileprovision` thất bại
+
+- Native file dialog mở trên máy Mac chạy API và chỉ nhận một file `.mobileprovision`, không import cả folder.
+- API cần interactive GUI session và quyền chạy `/usr/bin/osascript` để mở dialog.
+- File phải là provisioning profile Ad Hoc, chưa hết hạn và có concrete Bundle ID.
+- Nếu row đã có Bundle ID, profile import phải match chính xác ID đó.
+- API phải chạy trên macOS dưới đúng user sở hữu `~/Library/MobileDevice/Provisioning Profiles`.
+- Import không cài certificate/private key; certificate distribution tương ứng vẫn phải có trong keychain của runner user.
+- Existing profile cùng UUID được giữ nguyên, không bị CMS ghi đè.
+
 - Xcode archive/export errors.
 
 ### Worker không healthy

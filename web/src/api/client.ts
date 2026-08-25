@@ -9,14 +9,19 @@ import type {
   DashboardData,
   Project,
   ProjectInput,
+  ProjectSetupResult,
   ProjectUpdateInput,
   ProjectValidation,
+  RepositoryCandidate,
+  RepositoryDiscoveryResult,
   Session,
+  SigningDiscoveryResult,
+  SigningProfileImportResult,
   User,
   UserCreateInput,
   UserUpdateInput,
 } from '../types'
-import { parseBuild, parseBuildDetail, parseBuilds, parseDashboard, parseProject, parseProjects, parseProjectValidation, parseSession, parseUser, parseUsers } from './schemas'
+import { parseBuild, parseBuildDetail, parseBuilds, parseDashboard, parseProject, parseProjects, parseProjectSetup, parseProjectValidation, parseRepositoryChoice, parseRepositoryDiscovery, parseSession, parseSigningDiscovery, parseSigningProfileImport, parseUser, parseUsers } from './schemas'
 
 export class ApiError extends Error {
   constructor(message: string, public readonly status: number, public readonly details?: unknown) {
@@ -27,14 +32,7 @@ export class ApiError extends Error {
 
 interface RequestOptions extends Omit<RequestInit, 'body'> { body?: unknown }
 
-async function request(path: string, options: RequestOptions = {}): Promise<unknown> {
-  const requestToken = getToken()
-  const headers = new Headers(options.headers)
-  headers.set('Accept', 'application/json')
-  if (options.body !== undefined) headers.set('Content-Type', 'application/json')
-  if (requestToken) headers.set('Authorization', `Bearer ${requestToken}`)
-
-  const response = await fetch(path, { ...options, headers, body: options.body === undefined ? undefined : JSON.stringify(options.body) })
+async function responsePayload(response: Response, requestToken: string | null): Promise<unknown> {
   if (response.status === 401 && getToken() === requestToken) clearToken()
 
   const contentType = response.headers.get('content-type') ?? ''
@@ -53,6 +51,25 @@ async function request(path: string, options: RequestOptions = {}): Promise<unkn
   return payload
 }
 
+async function request(path: string, options: RequestOptions = {}): Promise<unknown> {
+  const requestToken = getToken()
+  const headers = new Headers(options.headers)
+  headers.set('Accept', 'application/json')
+  if (options.body !== undefined) headers.set('Content-Type', 'application/json')
+  if (requestToken) headers.set('Authorization', `Bearer ${requestToken}`)
+
+  const response = await fetch(path, { ...options, headers, body: options.body === undefined ? undefined : JSON.stringify(options.body) })
+  return responsePayload(response, requestToken)
+}
+
+async function binaryRequest(path: string, body: Blob): Promise<unknown> {
+  const requestToken = getToken()
+  const headers = new Headers({ Accept: 'application/json', 'Content-Type': 'application/octet-stream' })
+  if (requestToken) headers.set('Authorization', `Bearer ${requestToken}`)
+  const response = await fetch(path, { method: 'POST', headers, body })
+  return responsePayload(response, requestToken)
+}
+
 function queryString(values: Record<string, string | number | undefined>): string {
   const params = new URLSearchParams()
   Object.entries(values).forEach(([key, value]) => { if (value !== undefined && value !== '') params.set(key, String(value)) })
@@ -67,6 +84,11 @@ export function createIdempotencyKey(): string {
 export const api = {
   async getSession(): Promise<Session> { return parseSession(await request('/api/session')) },
   async getDashboard(): Promise<DashboardData> { return parseDashboard(await request('/api/dashboard')) },
+  async getRepositories(): Promise<RepositoryDiscoveryResult> { return parseRepositoryDiscovery(await request('/api/repositories')) },
+  async chooseRepository(): Promise<RepositoryCandidate | null> {
+    const payload = await request('/api/repositories/choose', { method: 'POST' })
+    return payload === undefined ? null : parseRepositoryChoice(payload)
+  },
   async getProjects(): Promise<Project[]> { return parseProjects(await request('/api/projects')) },
   async getProject(projectKey: string): Promise<Project> { return parseProject(await request(`/api/projects/${encodeURIComponent(projectKey)}`)) },
   async createProject(input: ProjectInput): Promise<Project> {
@@ -78,6 +100,21 @@ export const api = {
   async deleteProject(projectKey: string): Promise<void> { await request(`/api/projects/${encodeURIComponent(projectKey)}`, { method: 'DELETE' }) },
   async validateProject(projectKey: string): Promise<ProjectValidation> {
     return parseProjectValidation(await request(`/api/projects/${encodeURIComponent(projectKey)}/validate`, { method: 'POST' }))
+  },
+  async setupAndValidateProject(projectKey: string): Promise<ProjectSetupResult> {
+    return parseProjectSetup(await request(`/api/projects/${encodeURIComponent(projectKey)}/setup-and-validate`, { method: 'POST' }))
+  },
+  async discoverSigning(bundleId: string): Promise<SigningDiscoveryResult> {
+    return parseSigningDiscovery(await request('/api/signing/discover', { method: 'POST', body: { bundleId } }))
+  },
+  async chooseSigningProfile(expectedBundleId?: string): Promise<SigningProfileImportResult | null> {
+    const query = queryString({ expectedBundleId })
+    const payload = await request(`/api/signing/choose${query}`, { method: 'POST' })
+    return payload === undefined ? null : parseSigningProfileImport(payload)
+  },
+  async importSigningProfile(file: File, expectedBundleId?: string): Promise<SigningProfileImportResult> {
+    const query = queryString({ expectedBundleId })
+    return parseSigningProfileImport(await binaryRequest(`/api/signing/import${query}`, file))
   },
   async triggerBuild(projectKey: string, input: { appVersion: string; scheme: string; buildNumber: string; releaseNotes?: string }, idempotencyKey = createIdempotencyKey()): Promise<Build> {
     return parseBuild(await request(`/api/projects/${encodeURIComponent(projectKey)}/builds`, { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: input }))

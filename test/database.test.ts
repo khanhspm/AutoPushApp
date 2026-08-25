@@ -90,13 +90,17 @@ describe('database migrations and repositories', () => {
       appleTeamId: 'AB12CDEFGH',
       signingCertificate: 'Apple Distribution',
       provisioningProfiles: [
-        { bundleId: 'com.example.app', profileName: ' Example App AdHoc ' },
+        { bundleId: 'com.example.app', profileName: ' Example App AdHoc ', profileUuid: ' 11111111-1111-4111-8111-111111111111 ' },
         { bundleId: 'com.example.app.widget', profileName: 'Example Widget AdHoc' },
       ],
       larkNotificationChatId: 'oc_manual_app_group',
     });
 
-    expect(project.provisioningProfiles[0]).toEqual({ bundleId: 'com.example.app', profileName: 'Example App AdHoc' });
+    expect(project.provisioningProfiles[0]).toEqual({
+      bundleId: 'com.example.app',
+      profileName: 'Example App AdHoc',
+      profileUuid: '11111111-1111-4111-8111-111111111111',
+    });
     expect(projects.toSnapshot(project)).toMatchObject({
       schemaVersion: 2,
       signingMode: 'manual',
