@@ -18,6 +18,7 @@ describe('API authentication', () => {
 
     await expect(api.getSession()).resolves.toMatchObject({ authenticated: true, user: { name: 'Ops Admin' } })
     expect(new Headers(fetchMock.mock.calls[0][1]?.headers).get('Authorization')).toBe('Bearer admin-secret')
+    expect(fetchMock.mock.calls[0][1]?.credentials).toBe('same-origin')
   })
 
   it('posts the native repository chooser request and parses its canonical choice', async () => {
@@ -195,6 +196,20 @@ describe('API authentication', () => {
     expect(fetchMock.mock.calls[0][0]).toBe('/api/projects/setup%20app/setup-and-validate')
     expect(fetchMock.mock.calls[0][1]?.method).toBe('POST')
     expect(fetchMock.mock.calls[0][1]?.body).toBeUndefined()
+  })
+
+  it('requests and verifies a member OTP without requiring an admin bearer token', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ challengeId: 'challenge-1', expiresInSeconds: 600, message: 'Sent' }), { status: 202, headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ authenticated: true, user: { email: 'member@matechmobile.com', role: 'member' } }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+
+    await expect(api.requestOtp('member@matechmobile.com')).resolves.toMatchObject({ challengeId: 'challenge-1' })
+    await expect(api.verifyOtp('challenge-1', '012345')).resolves.toMatchObject({ user: { role: 'member' } })
+
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/auth/otp/request')
+    expect(fetchMock.mock.calls[0][1]?.body).toBe(JSON.stringify({ email: 'member@matechmobile.com' }))
+    expect(new Headers(fetchMock.mock.calls[0][1]?.headers).has('Authorization')).toBe(false)
+    expect(fetchMock.mock.calls[1][1]?.credentials).toBe('same-origin')
   })
 
   it('clears the stored token after a 401 response', async () => {

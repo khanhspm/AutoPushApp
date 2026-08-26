@@ -97,6 +97,11 @@ export const userFormSchema = z.object({
   enabled: z.boolean(),
 })
 
+export const cmsEmailSchema = z.string().trim().email('Enter a valid email').refine(
+  (email) => email.toLowerCase().endsWith('@matechmobile.com') && email.toLowerCase().split('@').at(-1) === 'matechmobile.com',
+  'Use an @matechmobile.com email',
+)
+
 export const buildTriggerSchema = z.object({
   appVersion: z.string().trim().min(1, 'App version is required').max(40).regex(/^\d+(?:\.\d+){0,2}$/, 'Use a version like 1.1 or 1.1.0'),
   scheme: z.string().trim().min(1, 'Scheme is required').max(120).regex(/^[A-Za-z0-9_. -]+$/, 'Use a valid Xcode scheme name'),

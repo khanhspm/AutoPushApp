@@ -1,69 +1,81 @@
-import { FormEvent, useEffect, useState } from 'react'
+import { FormEvent, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
-import type { User } from '../types'
-import { firstZodError, userFormSchema, type UserFormValues } from '../lib/validation'
-import { ConfirmDialog, EmptyState, ErrorState, FieldError, LoadingState, PageHeader, Toast } from '../components/ui'
+import type { CmsAccount, CmsInvitation } from '../types'
+import { cmsEmailSchema } from '../lib/validation'
+import { EmptyState, ErrorState, FieldError, LoadingState, PageHeader, Toast } from '../components/ui'
 import { formatRelativeTime } from '../lib/format'
 
-const emptyUser: UserFormValues = { id: '', displayName: '', enabled: true }
-
 export function UsersPage() {
-  const [editing, setEditing] = useState<User | 'new' | null>(null)
-  const [deleteTarget, setDeleteTarget] = useState<User | null>(null)
-  const [values, setValues] = useState<UserFormValues>(emptyUser)
-  const [permissions, setPermissions] = useState<string[]>([])
-  const [errors, setErrors] = useState<Record<string, string>>({})
+  const [email, setEmail] = useState('')
+  const [emailError, setEmailError] = useState('')
   const [message, setMessage] = useState('')
   const queryClient = useQueryClient()
-  const users = useQuery({ queryKey: ['users'], queryFn: api.getUsers })
-  const projects = useQuery({ queryKey: ['projects'], queryFn: api.getProjects })
+  const access = useQuery({ queryKey: ['cms-access'], queryFn: api.getCmsAccess })
 
-  useEffect(() => {
-    if (editing && editing !== 'new') { setValues({ id: editing.id, displayName: editing.displayName, enabled: editing.enabled }); setPermissions(editing.projectKeys) }
-    else if (editing === 'new') { setValues(emptyUser); setPermissions([]) }
-    setErrors({})
-  }, [editing])
-
-  const save = useMutation({
-    mutationFn: async (input: UserFormValues) => {
-      const saved = editing === 'new'
-        ? await api.createUser(input)
-        : await api.updateUser((editing as User).id, { displayName: input.displayName, enabled: input.enabled })
-      return api.updateUserPermissions(saved.id, permissions)
-    },
-    onSuccess: async () => { setEditing(null); setMessage('User access updated.'); await queryClient.invalidateQueries({ queryKey: ['users'] }) },
-    onError: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
+  const refresh = async () => queryClient.invalidateQueries({ queryKey: ['cms-access'] })
+  const invite = useMutation({
+    mutationFn: api.inviteCmsAccount,
+    onSuccess: async () => { setEmail(''); setMessage('Invitation sent. The account will appear after the recipient accepts.'); await refresh() },
   })
-  const remove = useMutation({ mutationFn: (id: string) => api.deleteUser(id), onSuccess: async () => { setDeleteTarget(null); setMessage('User deleted.'); await queryClient.invalidateQueries({ queryKey: ['users'] }) } })
+  const resend = useMutation({ mutationFn: api.resendCmsInvitation, onSuccess: async () => { setMessage('Invitation resent.'); await refresh() } })
+  const revoke = useMutation({ mutationFn: api.revokeCmsInvitation, onSuccess: async () => { setMessage('Invitation revoked.'); await refresh() } })
+  const updateStatus = useMutation({
+    mutationFn: ({ account, status }: { account: CmsAccount; status: 'active' | 'disabled' }) => api.updateCmsAccountStatus(account.id, status),
+    onSuccess: async (account) => { setMessage(`${account.email} is now ${account.status}.`); await refresh() },
+  })
 
-  function submit(event: FormEvent) { event.preventDefault(); const parsed = userFormSchema.safeParse(values); if (!parsed.success) return setErrors(firstZodError(parsed.error)); save.mutate(parsed.data) }
-  function togglePermission(key: string) { setPermissions((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key]) }
+  function submitInvite(event: FormEvent) {
+    event.preventDefault()
+    const parsed = cmsEmailSchema.safeParse(email)
+    if (!parsed.success) { setEmailError(parsed.error.issues[0]?.message ?? 'Invalid email'); return }
+    setEmailError('')
+    invite.mutate(parsed.data.toLowerCase())
+  }
+
+  const mutationError = invite.error ?? resend.error ?? revoke.error ?? updateStatus.error
+  const invitations = access.data?.invitations ?? []
+  const pending = invitations.filter((item) => item.status === 'pending')
+  const history = invitations.filter((item) => item.status !== 'pending')
 
   return <div className="page-stack">
-    <PageHeader eyebrow="Access control" title="Users & permissions" description="Manage Lark user IDs and project-level build permission." actions={<button className="button button-primary" onClick={() => setEditing('new')}>Add user</button>} />
-    {users.isLoading && <LoadingState label="Loading users" />}
-    {users.isError && <ErrorState error={users.error} onRetry={() => users.refetch()} />}
-    {users.data && users.data.length === 0 && <EmptyState title="No users configured" description="Add a Lark user ID to delegate project build access." action={<button className="button button-primary" onClick={() => setEditing('new')}>Add user</button>} />}
-    {users.data && users.data.length > 0 && <section className="panel user-table-panel"><div className="table-scroll"><table><thead><tr><th>User</th><th>User ID</th><th>Project access</th><th>Status</th><th>Updated</th><th /></tr></thead><tbody>{users.data.map((user) => <tr key={user.id}>
-      <td><div className="user-cell"><span className="avatar">{user.displayName.slice(0,1).toUpperCase()}</span><div><strong>{user.displayName}</strong><small>Lark user</small></div></div></td>
-      <td className="mono">{user.id}</td><td>{user.projectKeys.length ? `${user.projectKeys.length} project${user.projectKeys.length === 1 ? '' : 's'}` : <span className="muted">No access</span>}</td>
-      <td><span className={`project-state ${user.enabled ? '' : 'disabled'}`}><span />{user.enabled ? 'Enabled' : 'Disabled'}</span></td><td>{formatRelativeTime(user.updatedAt ?? user.createdAt)}</td>
-      <td><div className="row-actions"><button className="button button-ghost button-small" onClick={() => setEditing(user)}>Manage</button><button className="button button-ghost button-small danger-text" onClick={() => setDeleteTarget(user)}>Delete</button></div></td>
-    </tr>)}</tbody></table></div></section>}
+    <PageHeader eyebrow="Access control" title="CMS access" description="Invite @matechmobile.com accounts and control member access. An account is created only after the recipient accepts the email invitation." />
 
-    {editing && <div className="modal-backdrop" role="presentation" onMouseDown={() => !save.isPending && setEditing(null)}><form className="drawer-card" onSubmit={submit} onMouseDown={(e) => e.stopPropagation()}>
-      <div className="drawer-header"><div><p className="eyebrow">Access management</p><h2>{editing === 'new' ? 'Add user' : `Manage ${(editing as User).displayName}`}</h2></div><button className="icon-button" type="button" onClick={() => setEditing(null)} aria-label="Close">×</button></div>
-      <div className="drawer-body"><section className="drawer-section"><h3>Profile</h3><div className="form-grid">
-        <label className="field"><span className="field-label">Lark user ID</span><input className="input mono" value={values.id} disabled={editing !== 'new'} onChange={(e) => setValues({ ...values, id: e.target.value })} placeholder="ou_xxxxxxxxx" /><FieldError message={errors.id} /></label>
-        <label className="field"><span className="field-label">Display name</span><input className="input" value={values.displayName} onChange={(e) => setValues({ ...values, displayName: e.target.value })} /><FieldError message={errors.displayName} /></label>
-        <label className="toggle-field field-full"><span><strong>User enabled</strong><small>Disabled users cannot request project builds.</small></span><input type="checkbox" checked={values.enabled} onChange={(e) => setValues({ ...values, enabled: e.target.checked })} /><span className="toggle" /></label>
-      </div></section>
-      <section className="drawer-section"><div className="section-inline-heading"><div><h3>Project permissions</h3><p>Choose projects this user can build.</p></div></div><div className="permission-list">{projects.data?.map((project) => <label className="permission-item" key={project.projectKey}><input type="checkbox" checked={permissions.includes(project.projectKey)} onChange={() => togglePermission(project.projectKey)} /><span className="custom-checkbox">✓</span><span className="project-monogram project-monogram-small">{project.displayName.slice(0,2).toUpperCase()}</span><span><strong>{project.displayName}</strong><small>{project.projectKey}</small></span></label>)}</div></section>
-      {save.isError && <div className="inline-alert" role="alert">{save.error.message}</div>}</div>
-      <div className="drawer-footer"><button className="button button-ghost" type="button" onClick={() => setEditing(null)}>Cancel</button><button className="button button-primary" disabled={save.isPending}>{save.isPending ? 'Saving…' : 'Save access'}</button></div>
-    </form></div>}
-    <ConfirmDialog open={Boolean(deleteTarget)} title="Delete user?" description={`${deleteTarget?.displayName ?? 'This user'} will lose build access immediately.`} busy={remove.isPending} onCancel={() => setDeleteTarget(null)} onConfirm={() => deleteTarget && remove.mutate(deleteTarget.id)} />
-    <Toast message={remove.isError ? remove.error.message : message} tone={remove.isError ? 'error' : 'success'} />
+    <section className="panel access-invite-panel">
+      <div className="panel-header"><div><p className="panel-kicker">Invite member</p><h2>Send CMS invitation</h2></div></div>
+      <form className="access-invite-form" onSubmit={submitInvite}>
+        <label className="field"><span className="field-label">Company email</span><input className="input" type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@matechmobile.com" /><FieldError message={emailError} /></label>
+        <button className="button button-primary" disabled={invite.isPending || !email.trim()}>{invite.isPending ? 'Sending…' : 'Send invitation'}</button>
+      </form>
+    </section>
+
+    {access.isLoading && <LoadingState label="Loading CMS access" />}
+    {access.isError && <ErrorState error={access.error} onRetry={() => access.refetch()} />}
+
+    {access.data && <>
+      <AccessAccounts accounts={access.data.accounts} busy={updateStatus.isPending} onStatus={(account, status) => updateStatus.mutate({ account, status })} />
+      <InvitationTable title="Pending invitations" invitations={pending} pending busy={resend.isPending || revoke.isPending} onResend={(id) => resend.mutate(id)} onRevoke={(id) => revoke.mutate(id)} />
+      {history.length > 0 && <InvitationTable title="Invitation history" invitations={history} busy={false} onResend={() => undefined} onRevoke={() => undefined} />}
+    </>}
+
+    <Toast message={mutationError?.message ?? message} tone={mutationError ? 'error' : 'success'} />
   </div>
+}
+
+function AccessAccounts({ accounts, busy, onStatus }: { accounts: CmsAccount[]; busy: boolean; onStatus: (account: CmsAccount, status: 'active' | 'disabled') => void }) {
+  if (accounts.length === 0) return <EmptyState title="No CMS members" description="Invite a company email. The member will appear here after accepting the invitation." />
+  return <section className="panel user-table-panel"><div className="panel-header"><div><p className="panel-kicker">Members</p><h2>CMS accounts</h2></div></div><div className="table-scroll"><table><thead><tr><th>Account</th><th>Status</th><th>Accepted</th><th>Updated</th><th /></tr></thead><tbody>{accounts.map((account) => <tr key={account.id}>
+    <td><div className="user-cell"><span className="avatar">{account.email.slice(0, 1).toUpperCase()}</span><div><strong>{account.email}</strong><small>Member account</small></div></div></td>
+    <td><span className={`project-state ${account.status === 'disabled' ? 'disabled' : ''}`}><span />{account.status}</span></td>
+    <td>{formatRelativeTime(account.acceptedAt)}</td><td>{formatRelativeTime(account.updatedAt)}</td>
+    <td><button className={`button button-small ${account.status === 'active' ? 'button-ghost danger-text' : 'button-secondary'}`} disabled={busy} onClick={() => onStatus(account, account.status === 'active' ? 'disabled' : 'active')}>{account.status === 'active' ? 'Disable' : 'Enable'}</button></td>
+  </tr>)}</tbody></table></div></section>
+}
+
+function InvitationTable({ title, invitations, pending = false, busy, onResend, onRevoke }: { title: string; invitations: CmsInvitation[]; pending?: boolean; busy: boolean; onResend: (id: string) => void; onRevoke: (id: string) => void }) {
+  return <section className="panel user-table-panel"><div className="panel-header"><div><p className="panel-kicker">Invitations</p><h2>{title}</h2></div></div>{invitations.length === 0 ? <div className="access-empty-row">No {title.toLowerCase()}.</div> : <div className="table-scroll"><table><thead><tr><th>Email</th><th>Status</th><th>Sent</th><th>Expires</th><th /></tr></thead><tbody>{invitations.map((invitation) => <tr key={invitation.id}>
+    <td><strong>{invitation.email}</strong></td><td><span className={`status-badge status-${invitation.status}`}><span className="status-dot" />{invitation.status}</span></td>
+    <td>{invitation.sentAt ? formatRelativeTime(invitation.sentAt) : 'Not sent'}</td><td>{formatRelativeTime(invitation.expiresAt)}</td>
+    <td>{pending && <div className="row-actions"><button className="button button-ghost button-small" disabled={busy} onClick={() => onResend(invitation.id)}>Resend</button><button className="button button-ghost button-small danger-text" disabled={busy} onClick={() => onRevoke(invitation.id)}>Revoke</button></div>}</td>
+  </tr>)}</tbody></table></div>}</section>
 }

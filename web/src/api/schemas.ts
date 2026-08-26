@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { Build, BuildDetail, BuildListResult, DashboardData, Project, ProjectSetupResult, ProjectValidation, RepositoryCandidate, RepositoryDiscoveryResult, Session, SigningDiscoveryResult, SigningProfileImportResult, User } from '../types'
+import type { Build, BuildDetail, BuildListResult, CmsAccessOverview, CmsAccount, CmsInvitation, DashboardData, Project, ProjectSetupResult, ProjectValidation, RepositoryCandidate, RepositoryDiscoveryResult, Session, SigningDiscoveryResult, SigningProfileImportResult, User } from '../types'
 
 const unknownObject = z.object({}).passthrough()
 const recordSchema = z.record(z.unknown())
@@ -33,9 +33,50 @@ function unwrap(value: unknown, keys: string[]): unknown {
 export function parseSession(value: unknown): Session {
   const raw = object(unwrap(value, ['session', 'data']))
   const userRaw = raw.user && typeof raw.user === 'object' ? object(raw.user) : undefined
+  const role = optionalString(userRaw?.role)
   return {
     authenticated: booleanValue(raw.authenticated, true),
-    user: userRaw ? { id: optionalString(userRaw.id), name: optionalString(userRaw.name ?? userRaw.displayName), email: optionalString(userRaw.email), role: optionalString(userRaw.role) } : undefined,
+    expiresAt: optionalString(raw.expiresAt),
+    user: userRaw ? {
+      id: optionalString(userRaw.id),
+      name: optionalString(userRaw.name ?? userRaw.displayName),
+      email: optionalString(userRaw.email),
+      role: role === 'admin' || role === 'member' ? role : undefined,
+    } : undefined,
+  }
+}
+
+export function parseCmsAccount(value: unknown): CmsAccount {
+  const raw = object(unwrap(value, ['account', 'data']))
+  return {
+    id: stringValue(raw.id),
+    email: stringValue(raw.email),
+    status: stringValue(raw.status) === 'disabled' ? 'disabled' : 'active',
+    acceptedAt: stringValue(raw.acceptedAt),
+    createdAt: stringValue(raw.createdAt),
+    updatedAt: stringValue(raw.updatedAt),
+  }
+}
+
+function parseCmsInvitation(value: unknown): CmsInvitation {
+  const raw = object(value)
+  const status = stringValue(raw.status)
+  return {
+    id: stringValue(raw.id),
+    email: stringValue(raw.email),
+    status: status === 'accepted' || status === 'expired' || status === 'revoked' ? status : 'pending',
+    expiresAt: stringValue(raw.expiresAt),
+    sentAt: optionalString(raw.sentAt),
+    acceptedAt: optionalString(raw.acceptedAt),
+    createdAt: stringValue(raw.createdAt),
+  }
+}
+
+export function parseCmsAccess(value: unknown): CmsAccessOverview {
+  const raw = object(unwrap(value, ['data']))
+  return {
+    accounts: Array.isArray(raw.accounts) ? raw.accounts.map(parseCmsAccount) : [],
+    invitations: Array.isArray(raw.invitations) ? raw.invitations.map(parseCmsInvitation) : [],
   }
 }
 

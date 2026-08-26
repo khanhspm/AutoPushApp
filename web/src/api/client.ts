@@ -6,7 +6,11 @@ import type {
   BuildFilters,
   BuildListResult,
   BuildLog,
+  CmsAccessOverview,
+  CmsAccount,
+  CmsAccountStatus,
   DashboardData,
+  OtpRequestResult,
   Project,
   ProjectInput,
   ProjectSetupResult,
@@ -21,7 +25,7 @@ import type {
   UserCreateInput,
   UserUpdateInput,
 } from '../types'
-import { parseBuild, parseBuildDetail, parseBuilds, parseDashboard, parseProject, parseProjects, parseProjectSetup, parseProjectValidation, parseRepositoryChoice, parseRepositoryDiscovery, parseSession, parseSigningDiscovery, parseSigningProfileImport, parseUser, parseUsers } from './schemas'
+import { parseBuild, parseBuildDetail, parseBuilds, parseCmsAccess, parseCmsAccount, parseDashboard, parseProject, parseProjects, parseProjectSetup, parseProjectValidation, parseRepositoryChoice, parseRepositoryDiscovery, parseSession, parseSigningDiscovery, parseSigningProfileImport, parseUser, parseUsers } from './schemas'
 
 export class ApiError extends Error {
   constructor(message: string, public readonly status: number, public readonly details?: unknown) {
@@ -58,7 +62,7 @@ async function request(path: string, options: RequestOptions = {}): Promise<unkn
   if (options.body !== undefined) headers.set('Content-Type', 'application/json')
   if (requestToken) headers.set('Authorization', `Bearer ${requestToken}`)
 
-  const response = await fetch(path, { ...options, headers, body: options.body === undefined ? undefined : JSON.stringify(options.body) })
+  const response = await fetch(path, { ...options, credentials: 'same-origin', headers, body: options.body === undefined ? undefined : JSON.stringify(options.body) })
   return responsePayload(response, requestToken)
 }
 
@@ -66,7 +70,7 @@ async function binaryRequest(path: string, body: Blob): Promise<unknown> {
   const requestToken = getToken()
   const headers = new Headers({ Accept: 'application/json', 'Content-Type': 'application/octet-stream' })
   if (requestToken) headers.set('Authorization', `Bearer ${requestToken}`)
-  const response = await fetch(path, { method: 'POST', headers, body })
+  const response = await fetch(path, { method: 'POST', credentials: 'same-origin', headers, body })
   return responsePayload(response, requestToken)
 }
 
@@ -83,6 +87,29 @@ export function createIdempotencyKey(): string {
 
 export const api = {
   async getSession(): Promise<Session> { return parseSession(await request('/api/session')) },
+  async requestOtp(email: string): Promise<OtpRequestResult> {
+    const payload = await request('/api/auth/otp/request', { method: 'POST', body: { email } })
+    const raw = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {}
+    return {
+      challengeId: String(raw.challengeId ?? ''),
+      expiresInSeconds: Number(raw.expiresInSeconds ?? 0),
+      message: String(raw.message ?? ''),
+    }
+  },
+  async verifyOtp(challengeId: string, code: string): Promise<Session> {
+    return parseSession(await request('/api/auth/otp/verify', { method: 'POST', body: { challengeId, code } }))
+  },
+  async acceptInvitation(token: string): Promise<CmsAccount> {
+    return parseCmsAccount(await request('/api/auth/invitations/accept', { method: 'POST', body: { token } }))
+  },
+  async logout(): Promise<void> { await request('/api/auth/logout', { method: 'POST' }) },
+  async getCmsAccess(): Promise<CmsAccessOverview> { return parseCmsAccess(await request('/api/cms-accounts')) },
+  async inviteCmsAccount(email: string): Promise<void> { await request('/api/cms-accounts/invitations', { method: 'POST', body: { email } }) },
+  async resendCmsInvitation(id: string): Promise<void> { await request(`/api/cms-accounts/invitations/${encodeURIComponent(id)}/resend`, { method: 'POST' }) },
+  async revokeCmsInvitation(id: string): Promise<void> { await request(`/api/cms-accounts/invitations/${encodeURIComponent(id)}`, { method: 'DELETE' }) },
+  async updateCmsAccountStatus(id: string, status: CmsAccountStatus): Promise<CmsAccount> {
+    return parseCmsAccount(await request(`/api/cms-accounts/${encodeURIComponent(id)}`, { method: 'PATCH', body: { status } }))
+  },
   async getDashboard(): Promise<DashboardData> { return parseDashboard(await request('/api/dashboard')) },
   async getRepositories(): Promise<RepositoryDiscoveryResult> { return parseRepositoryDiscovery(await request('/api/repositories')) },
   async chooseRepository(): Promise<RepositoryCandidate | null> {
@@ -139,6 +166,7 @@ export const api = {
   async downloadBuildLog(id: string): Promise<Blob> {
     const requestToken = getToken()
     const response = await fetch(`/api/builds/${encodeURIComponent(id)}/log/download`, {
+      credentials: 'same-origin',
       headers: requestToken ? { Authorization: `Bearer ${requestToken}` } : undefined,
     })
     if (response.status === 401 && getToken() === requestToken) clearToken()

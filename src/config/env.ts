@@ -23,6 +23,11 @@ const csvString = z
       : [],
   );
 
+const trueByDefaultBooleanString = z
+  .string()
+  .default('true')
+  .transform((value) => value === 'true');
+
 const envSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -38,8 +43,18 @@ const envSchema = z
 
     CMS_ADMIN_TOKEN: z.string().min(16).default('dev-admin-token-change-me'),
     CMS_DEV_ORIGIN: z.string().url().default('http://localhost:5173'),
+    CMS_PUBLIC_URL: z.string().url().default('http://localhost:5173'),
+    CMS_AUTH_PEPPER: z.string().min(16).default('dev-cms-auth-pepper-change-me'),
+    CMS_SESSION_COOKIE_NAME: z.string().trim().min(1).default('autopush_session'),
     SERVE_CMS: booleanString,
     CMS_DIST_PATH: z.string().default('./web/dist'),
+
+    SMTP_HOST: z.string().trim().min(1).default('smtp.gmail.com'),
+    SMTP_PORT: z.coerce.number().int().positive().default(465),
+    SMTP_SECURE: trueByDefaultBooleanString,
+    SMTP_USER: z.string().email().optional(),
+    SMTP_APP_PASSWORD: z.string().min(1).optional(),
+    SMTP_FROM: z.string().trim().min(1).optional(),
 
     REDIS_URL: z.string().url().default('redis://localhost:6379'),
     DB_PATH: z.string().default('./data/autopushapp.sqlite'),
@@ -63,6 +78,31 @@ const envSchema = z
         path: ['CMS_ADMIN_TOKEN'],
         message: 'CMS_ADMIN_TOKEN must contain at least 32 characters in production',
       });
+    }
+    if (value.NODE_ENV === 'production' && value.CMS_AUTH_PEPPER.length < 32) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['CMS_AUTH_PEPPER'],
+        message: 'CMS_AUTH_PEPPER must contain at least 32 characters in production',
+      });
+    }
+    if (value.NODE_ENV === 'production' && ['localhost', '127.0.0.1'].includes(new URL(value.CMS_PUBLIC_URL).hostname)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['CMS_PUBLIC_URL'],
+        message: 'CMS_PUBLIC_URL must use the deployed CMS hostname in production',
+      });
+    }
+    if (value.NODE_ENV === 'production') {
+      for (const field of ['SMTP_USER', 'SMTP_APP_PASSWORD', 'SMTP_FROM'] as const) {
+        if (!value[field]) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [field],
+            message: `${field} is required in production`,
+          });
+        }
+      }
     }
   });
 

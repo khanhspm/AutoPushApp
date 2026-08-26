@@ -63,9 +63,45 @@ export interface RepositoryDiscoveryResult {
   truncated: boolean
 }
 
+export type CmsRole = 'admin' | 'member'
+
 export interface Session {
   authenticated: boolean
-  user?: { id?: string; name?: string; email?: string; role?: string }
+  expiresAt?: string
+  user?: { id?: string; name?: string; email?: string; role?: CmsRole }
+}
+
+export type CmsAccountStatus = 'active' | 'disabled'
+export type CmsInvitationStatus = 'pending' | 'accepted' | 'expired' | 'revoked'
+
+export interface CmsAccount {
+  id: string
+  email: string
+  status: CmsAccountStatus
+  acceptedAt: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface CmsInvitation {
+  id: string
+  email: string
+  status: CmsInvitationStatus
+  expiresAt: string
+  sentAt?: string
+  acceptedAt?: string
+  createdAt: string
+}
+
+export interface CmsAccessOverview {
+  accounts: CmsAccount[]
+  invitations: CmsInvitation[]
+}
+
+export interface OtpRequestResult {
+  challengeId: string
+  expiresInSeconds: number
+  message: string
 }
 
 export interface Project {
