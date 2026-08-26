@@ -92,7 +92,7 @@ export function buildRoutes(context: AppContext): FastifyPluginAsync {
       const result = await context.buildRequests.retry(
         buildId,
         idempotencyHeader(request.headers),
-        'cms-admin',
+        request.cmsPrincipal?.role === 'member' ? request.cmsPrincipal.email : 'cms-admin',
         input,
       );
       return reply.code(result.created ? 202 : 200).send(result);

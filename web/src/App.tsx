@@ -1,8 +1,10 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { ApiError } from './api/client'
+import { AdminRoute } from './components/AdminRoute'
 import { AppShell } from './components/AppShell'
 import { ProtectedRoute } from './components/ProtectedRoute'
+import { AcceptInvitePage } from './pages/AcceptInvitePage'
 import { BuildDetailPage } from './pages/BuildDetailPage'
 import { BuildsPage } from './pages/BuildsPage'
 import { DashboardPage } from './pages/DashboardPage'
@@ -31,13 +33,14 @@ export function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/accept-invite" element={<AcceptInvitePage />} />
           <Route path="/" element={<ProtectedRoute><AppShell /></ProtectedRoute>}>
             <Route index element={<DashboardPage />} />
             <Route path="projects" element={<ProjectsPage />} />
             <Route path="projects/new" element={<ProjectFormPage />} />
             <Route path="projects/:projectKey" element={<ProjectDetailPage />} />
             <Route path="projects/:projectKey/edit" element={<ProjectFormPage />} />
-            <Route path="users" element={<UsersPage />} />
+            <Route path="users" element={<AdminRoute><UsersPage /></AdminRoute>} />
             <Route path="builds" element={<BuildsPage />} />
             <Route path="builds/new" element={<NewBuildPage />} />
             <Route path="builds/:id" element={<BuildDetailPage />} />

@@ -480,17 +480,23 @@ RUNNER_ID=mac-mini-01
 | `HOST` | Không | `0.0.0.0` | Interface Fastify listen |
 | `PORT` | Không | `3000` | API port |
 | `LOG_LEVEL` | Không | `info` | Pino log level |
-| `CMS_ADMIN_TOKEN` | Có trong production | Dev fallback có sẵn | Shared Bearer token để login CMS và gọi `/api/*` |
-| `CMS_DEV_ORIGIN` | Không | `http://localhost:5173` | CORS origin trong development |
+| `CMS_ADMIN_TOKEN` | Có trong production | Dev fallback có sẵn | Bearer token dành riêng cho administrator |
+| `CMS_DEV_ORIGIN` | Không | `http://localhost:5173` | CORS/CSRF origin trong development |
+| `CMS_PUBLIC_URL` | Có trong production | `http://localhost:5173` | Public CMS URL dùng cho invite link và Origin validation |
+| `CMS_AUTH_PEPPER` | Có trong production | Dev fallback có sẵn | HMAC secret cho invite, OTP, IP và session token hashes |
+| `CMS_SESSION_COOKIE_NAME` | Không | `autopush_session` | Tên HttpOnly member session cookie |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_SECURE` | Có trong production | Gmail SMTP defaults | Gmail/Workspace SMTP transport |
+| `SMTP_USER` / `SMTP_APP_PASSWORD` / `SMTP_FROM` | Có trong production | Không | Workspace sender, App Password và From header |
 | `SERVE_CMS` | Không | `false` ở development | Cho phép Fastify serve frontend build |
 | `CMS_DIST_PATH` | Không | `./web/dist` | Thư mục frontend production build |
 
 Lưu ý:
 
 - `CMS_ADMIN_TOKEN` phải có ít nhất 16 ký tự theo schema và ít nhất **32 ký tự trong production**.
+- `CMS_AUTH_PEPPER` phải dùng secret khác admin token và có ít nhất **32 ký tự trong production**.
+- Gmail SMTP nên dùng Google Workspace App Password; không commit App Password vào repository.
 - Ở production, code hiện tự đặt `SERVE_CMS=true` dù `.env` ghi `false`. Vì vậy phải chạy `npm run build` để có `web/dist/index.html` trước khi start API production.
-- Browser lưu token trong `sessionStorage` với key `autopush.adminToken` và gửi qua `Authorization: Bearer <token>`.
-- Đây là shared admin token MVP, không phải hệ thống tài khoản/SSO nhiều admin.
+- Browser chỉ lưu admin token trong `sessionStorage`. Member login bằng OTP nhận opaque HttpOnly cookie, expiry tuyệt đối 72 giờ.
 
 ### 5.3. Redis, SQLite và runner variables
 
@@ -922,12 +928,12 @@ Fastfile mẫu sử dụng distribution method `ad-hoc`, gọi `increment_versio
 
 ### 9.1. Login CMS
 
-1. Mở <http://localhost:5173> trong development hoặc URL production.
-2. Nhập đúng `CMS_ADMIN_TOKEN`.
-3. CMS gọi `GET /api/session` để xác minh.
-4. Token được lưu trong `sessionStorage` của browser tab/session.
+Có hai luồng đăng nhập:
 
-Đây là shared administrator token. Lark users ở mục Users không dùng để login CMS.
+- **Member**: nhập email đúng `@matechmobile.com`, nhận OTP 6 số qua Gmail và verify. Account phải được admin invite và recipient accept trước đó. Session nằm trong HttpOnly cookie và hết hạn tuyệt đối sau 72 giờ.
+- **Administrator**: mở khu vực administrator trên login page và nhập `CMS_ADMIN_TOKEN`. Token được giữ trong `sessionStorage` của browser tab/session.
+
+Admin invite member tại **CMS Access**. Email chứa link `/accept-invite#token=...`; link chỉ mở trang xác nhận, account chỉ được tạo khi recipient bấm **Accept invitation**. Lark user IDs không phải CMS login accounts.
 
 ### 9.2. Tạo project mới
 
@@ -1044,25 +1050,16 @@ Khi update project, backend reset:
 
 Sau mọi thay đổi cấu hình, cần Validate và Enable lại. Điều này tránh worker chạy với cấu hình chưa được xác nhận.
 
-### 9.5. Cấu hình Users & permissions cho Lark
+### 9.5. CMS Access và Lark permissions
 
-Mục này quản lý quyền build từ Lark, không phải CMS login accounts.
+Trang `/users` hiện là **CMS Access**, chỉ administrator thấy và truy cập được. Trang này cho phép:
 
-1. Vào **Users & permissions**.
-2. Add user.
-3. Nhập Lark user `open_id`, thường có dạng `ou_...`.
-4. Nhập display name.
-5. Enable user.
-6. Chọn các project user được phép build.
-7. Save permissions.
+1. Gửi invite tới email đúng `@matechmobile.com`.
+2. Resend/revoke pending invitation.
+3. Theo dõi accepted/expired/revoked invitation.
+4. Enable/disable CMS member; disable làm các member session hiện tại mất hiệu lực.
 
-Khi nhận command Lark, API chỉ enqueue nếu sender:
-
-- Tồn tại trong CMS.
-- Đang enabled.
-- Có quyền build project được yêu cầu.
-
-CMS admin token vẫn có quyền quản trị và trigger build qua CMS/API.
+Bảng `users`, `project_user_permissions` và API `/api/users` cũ vẫn được giữ để Lark bot kiểm tra `open_id` và quyền build theo project. API này giờ chỉ administrator gọi được; UI Lark user management đã được thay khỏi trang chính và có thể được đưa sang trang Integration riêng sau.
 
 ### 9.6. Trigger build từ CMS
 
@@ -1314,8 +1311,12 @@ Không chạy API mới cùng worker cũ nếu payload schema không tương th�
 
 - `GET /health`
 - `POST /webhook/lark`
+- `POST /api/auth/invitations/accept`
+- `POST /api/auth/otp/request`
+- `POST /api/auth/otp/verify`
+- `POST /api/auth/logout` (idempotent)
 
-### Yêu cầu `Authorization: Bearer <CMS_ADMIN_TOKEN>`
+### Yêu cầu admin bearer hoặc member session cookie
 
 - `GET /api/session`
 - `GET /api/dashboard`
@@ -1323,14 +1324,16 @@ Không chạy API mới cùng worker cũ nếu payload schema không tương th�
 - `GET|PUT|DELETE /api/projects/:projectKey`
 - `POST /api/projects/:projectKey/validate`
 - `POST /api/projects/:projectKey/builds`
-- `GET|POST /api/users`
-- `GET|PUT|DELETE /api/users/:userId`
-- `PUT /api/users/:userId/project-permissions`
 - `GET /api/builds`
 - `GET /api/builds/:buildId`
 - `GET /api/builds/:buildId/log`
 - `GET /api/builds/:buildId/log/download`
 - `POST /api/builds/:buildId/retry`
+
+### Chỉ administrator bearer
+
+- `/api/cms-accounts/**`: list account/invitation, invite, resend, revoke, enable/disable.
+- `/api/users/**`: Lark identity và project build permissions cũ.
 
 Build/retry endpoints yêu cầu header:
 
@@ -1348,9 +1351,12 @@ Frontend dùng UUID để tạo idempotency key.
 
 - Helmet security headers.
 - Rate limit 120 requests/phút.
-- Bearer auth cho `/api/*`.
+- Hybrid auth: administrator Bearer token hoặc opaque member session cookie.
+- Invite/session token và OTP chỉ lưu HMAC hash; OTP one-time, TTL 10 phút và giới hạn attempt/request.
+- Member cookie `HttpOnly`, `SameSite=Strict`, expiry tuyệt đối 72 giờ; cookie mutation kiểm tra exact Origin.
+- Admin-only guard cho CMS Access và Lark user APIs.
 - CORS dev origin.
-- Timing-safe compare admin token.
+- Timing-safe compare admin token và OTP digest.
 - Secret redaction trong application/build logs.
 - Canonical repository root boundary.
 - Log path traversal/symlink protection.

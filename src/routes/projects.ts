@@ -245,7 +245,7 @@ export function projectRoutes(context: AppContext): FastifyPluginAsync {
         buildNumber: input.buildNumber,
         releaseNotes: input.releaseNotes,
         source: 'cms',
-        requestedBy: 'cms-admin',
+        requestedBy: request.cmsPrincipal?.role === 'member' ? request.cmsPrincipal.email : 'cms-admin',
         idempotencyKey: idempotencyHeader(request.headers),
       });
       return reply.code(result.created ? 202 : 200).send(result);

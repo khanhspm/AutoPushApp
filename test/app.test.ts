@@ -17,10 +17,13 @@ import type { RepositoryCandidate } from '../src/domain/repository';
 import { AppError } from '../src/http/errors';
 import type { BuildQueueGateway } from '../src/queue/build-queue';
 import { BuildRepository } from '../src/repositories/build-repository';
+import { CmsAuthRepository } from '../src/repositories/cms-auth-repository';
 import { ProjectRepository } from '../src/repositories/project-repository';
 import { UserRepository } from '../src/repositories/user-repository';
 import { BuildLogService } from '../src/services/build-log-service';
 import { BuildRequestService } from '../src/services/build-request-service';
+import { CmsAuthService } from '../src/services/cms-auth-service';
+import type { CmsMailGateway } from '../src/services/cms-mail-service';
 import { ProjectConfigService } from '../src/services/project-config-service';
 import type { ProjectSetupGateway } from '../src/services/project-setup-service';
 import type { RepositoryFolderChooserGateway } from '../src/services/repository-folder-chooser-service';
@@ -87,6 +90,12 @@ function context(
   migrateDatabase(database);
   const projects = new ProjectRepository(database);
   const users = new UserRepository(database);
+  const cmsAuthRepository = new CmsAuthRepository(database);
+  const mail: CmsMailGateway = { async sendInvitation() {}, async sendOtp() {} };
+  const cmsAuth = new CmsAuthService(cmsAuthRepository, mail, {
+    pepper: 'test-cms-auth-pepper-that-is-at-least-32-characters',
+    publicUrl: env.CMS_PUBLIC_URL,
+  });
   const builds = new BuildRepository(database);
   const queue: BuildQueueGateway = {
     async enqueue(data) {
@@ -125,6 +134,8 @@ function context(
     queue,
     projects,
     users,
+    cmsAuthRepository,
+    cmsAuth,
     builds,
     projectConfig,
     projectSetup,

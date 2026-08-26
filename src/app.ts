@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
+import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
@@ -12,9 +13,11 @@ import { ZodError } from 'zod';
 import type { AppContext } from './app-context';
 import { env } from './config/env';
 import { AppError } from './http/errors';
-import { createAdminAuthHook } from './plugins/admin-auth';
+import { createCmsAuthHooks } from './plugins/cms-auth';
 import { getWorkerHeartbeat } from './queue/worker-heartbeat';
+import { authRoutes } from './routes/auth';
 import { buildRoutes } from './routes/builds';
+import { cmsAccountRoutes } from './routes/cms-accounts';
 import { dashboardRoutes } from './routes/dashboard';
 import { projectRoutes } from './routes/projects';
 import { repositoryRoutes } from './routes/repositories';
@@ -30,8 +33,10 @@ export async function buildApp(context: AppContext) {
   });
 
   await app.register(helmet, { contentSecurityPolicy: false });
+  await app.register(cookie);
   await app.register(cors, {
     origin: env.NODE_ENV === 'development' ? env.CMS_DEV_ORIGIN : false,
+    credentials: env.NODE_ENV === 'development',
   });
   await app.register(rateLimit, { max: 120, timeWindow: '1 minute' });
   await app.register(rawBody, {
@@ -109,22 +114,53 @@ export async function buildApp(context: AppContext) {
 
   app.post('/webhook/lark', { config: { rawBody: true } }, createLarkWebhookHandler(context.buildRequests));
 
-  const authenticateAdmin = createAdminAuthHook(env.CMS_ADMIN_TOKEN);
+  const allowedOrigins = [...new Set([
+    new URL(env.CMS_PUBLIC_URL).origin,
+    ...(env.NODE_ENV === 'development' ? [new URL(env.CMS_DEV_ORIGIN).origin] : []),
+  ])];
+  const { requireCmsAuthentication, requireCmsAdmin } = createCmsAuthHooks(context.cmsAuth, {
+    adminToken: env.CMS_ADMIN_TOKEN,
+    sessionCookieName: env.CMS_SESSION_COOKIE_NAME,
+    allowedOrigins,
+  });
+
+  await app.register(authRoutes(context.cmsAuth, {
+    cookieName: env.CMS_SESSION_COOKIE_NAME,
+    secureCookie: env.NODE_ENV === 'production',
+  }), { prefix: '/api/auth' });
+
   await app.register(
     async (cms) => {
-      cms.addHook('onRequest', authenticateAdmin);
-      cms.get('/session', async () => ({ authenticated: true }));
+      cms.addHook('onRequest', requireCmsAuthentication);
+      cms.get('/session', async (request) => {
+        const principal = request.cmsPrincipal!;
+        return principal.role === 'admin'
+          ? { authenticated: true, user: { name: 'Administrator', role: 'admin' } }
+          : {
+              authenticated: true,
+              user: {
+                id: principal.accountId,
+                email: principal.email,
+                name: principal.email.split('@')[0],
+                role: 'member',
+              },
+            };
+      });
       await cms.register(dashboardRoutes(context), { prefix: '/dashboard' });
       await cms.register(projectRoutes(context), { prefix: '/projects' });
-      await cms.register(userRoutes(context), { prefix: '/users' });
       await cms.register(buildRoutes(context), { prefix: '/builds' });
       await cms.register(repositoryRoutes(context), { prefix: '/repositories' });
       await cms.register(signingRoutes(context), { prefix: '/signing' });
+      await cms.register(async (admin) => {
+        admin.addHook('onRequest', requireCmsAdmin);
+        await admin.register(cmsAccountRoutes(context.cmsAuth), { prefix: '/cms-accounts' });
+        await admin.register(userRoutes(context), { prefix: '/users' });
+      });
     },
     { prefix: '/api' },
   );
 
-  app.get('/builds/history', { preHandler: authenticateAdmin }, async () => {
+  app.get('/builds/history', { preHandler: requireCmsAdmin }, async () => {
     const result = context.builds.list({ limit: 50 });
     return { ...result, deprecated: true };
   });

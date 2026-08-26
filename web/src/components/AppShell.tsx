@@ -1,13 +1,14 @@
 import { useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
+import { useSession } from '../hooks/useSession'
 import { clearToken } from '../lib/auth'
 
 const navigation = [
   { to: '/', label: 'Dashboard', icon: 'grid' },
   { to: '/projects', label: 'Projects', icon: 'box' },
-  { to: '/users', label: 'Users', icon: 'users' },
+  { to: '/users', label: 'CMS Access', icon: 'users', adminOnly: true },
   { to: '/builds', label: 'Builds', icon: 'activity' },
 ]
 
@@ -25,9 +26,10 @@ export function AppShell() {
   const [menuOpen, setMenuOpen] = useState(false)
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const session = useQuery({ queryKey: ['session'], queryFn: api.getSession, staleTime: 60_000 })
+  const session = useSession()
 
-  function signOut() {
+  async function signOut() {
+    await api.logout().catch(() => undefined)
     clearToken()
     queryClient.clear()
     navigate('/login', { replace: true })
@@ -49,7 +51,7 @@ export function AppShell() {
         </div>
         <nav className="sidebar-nav" aria-label="Primary navigation">
           <p className="nav-section-label">Workspace</p>
-          {navigation.map((item) => (
+          {navigation.filter((item) => !item.adminOnly || session.data?.user?.role === 'admin').map((item) => (
             <NavLink
               key={item.to}
               to={item.to}

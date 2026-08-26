@@ -128,7 +128,7 @@ describe('database migrations and repositories', () => {
     const result = migrateDatabase(db);
     const project = new ProjectRepository(db).findByKey('ExistingApp');
 
-    expect(result.appliedVersions).toEqual([4, 5, 6]);
+    expect(result.appliedVersions).toEqual([4, 5, 6, 7]);
     expect(project?.larkNotificationChatId).toBeNull();
   });
 
