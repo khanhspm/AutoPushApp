@@ -174,6 +174,7 @@ export async function buildApp(context: AppContext) {
     await app.register(fastifyStatic, {
       root: env.CMS_DIST_PATH,
       wildcard: false,
+      index: false,
       maxAge: '1y',
       immutable: true,
     });
