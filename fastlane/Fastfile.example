@@ -54,7 +54,12 @@ def configure_signing(gym_options)
     signing_certificate = required_env("AUTOPUSH_SIGNING_CERTIFICATE")
 
     gym_options[:export_team_id] = team_id
-    gym_options[:codesigning_identity] = signing_certificate
+    # Deliberately NOT setting :codesigning_identity. gym turns it into a global
+    # CODE_SIGN_IDENTITY xcarg, which overrides build settings on *every* target in
+    # the workspace -- including Swift Packages (Firebase, GoogleUtilities, nanopb...)
+    # that sign automatically and have no team, failing the archive. The archive step
+    # gets its identity from the target's own build settings; the export step gets it
+    # from export_options below.
     gym_options[:skip_profile_detection] = true
     gym_options[:export_options] = {
       signingStyle: "manual",
