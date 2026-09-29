@@ -6,7 +6,7 @@ import IORedis from 'ioredis';
 import type { BuildJobDataV3, BuildRecord } from '../domain/build';
 import { BuildRepository } from '../repositories/build-repository';
 import { BuildLogService } from '../services/build-log-service';
-import { triggerFastlane } from '../services/fastlane-service';
+import { FastlaneCancelledError, triggerFastlane } from '../services/fastlane-service';
 import { notifyBuildFailed, notifyBuildSucceeded } from '../services/notification';
 import { logger } from '../utils/logger';
 import { BUILD_QUEUE_NAME } from './build-queue';
@@ -19,6 +19,8 @@ export interface BuildProcessorDependencies {
   builds: BuildRepository;
   logs: BuildLogService;
   heartbeat?: WorkerHeartbeat;
+  /** How often a running build checks whether a cancel was requested. */
+  cancelPollIntervalMs?: number;
 }
 
 export function canonicalBuildJobData(build: BuildRecord): BuildJobDataV3 {
@@ -72,12 +74,29 @@ export function createBuildProcessor(dependencies: BuildProcessorDependencies) {
       return;
     }
     if (!dependencies.builds.claimRunning(data.buildId)) {
+      const latest = dependencies.builds.findById(data.buildId);
+      if (latest?.status === 'failed' && latest.failurePhase === 'cancelled') {
+        logger.info({ jobId: job.id, buildId: data.buildId }, 'Skipping build cancelled before it started');
+        return;
+      }
       throw new Error(`Build ${data.buildId} could not transition to running`);
     }
 
     const attempt = current.attemptCount + 1;
     const executionConfig = executionConfigFor(canonicalData);
     await dependencies.heartbeat?.setCurrentBuild(canonicalData.buildId);
+
+    const cancellation = new AbortController();
+    const cancelPoll = setInterval(() => {
+      try {
+        if (dependencies.builds.isCancelRequested(canonicalData.buildId)) {
+          cancellation.abort();
+        }
+      } catch (error) {
+        logger.warn({ buildId: canonicalData.buildId, error }, 'Failed to check build cancel request');
+      }
+    }, dependencies.cancelPollIntervalMs ?? 2_000);
+    cancelPoll.unref();
 
     try {
       const result = await triggerFastlane(
@@ -88,6 +107,7 @@ export function createBuildProcessor(dependencies: BuildProcessorDependencies) {
           buildNumber: canonicalData.request.buildNumber,
           releaseNotes: canonicalData.request.releaseNotes,
           config: executionConfig,
+          signal: cancellation.signal,
         },
         dependencies.logs,
       );
@@ -100,6 +120,11 @@ export function createBuildProcessor(dependencies: BuildProcessorDependencies) {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       const expectedLogPath = path.join(canonicalData.buildId, `attempt-${attempt}.log`);
+      if (error instanceof FastlaneCancelledError) {
+        dependencies.builds.markCancelled(canonicalData.buildId, 'Build was cancelled by a CMS user', expectedLogPath);
+        logger.info({ jobId: job.id, buildId: canonicalData.buildId }, 'Build job cancelled');
+        return;
+      }
       dependencies.builds.markFailed(canonicalData.buildId, errorMessage.slice(0, 1000), 'build', ['running'], expectedLogPath);
       await notifyBuildFailed(canonicalData).catch((notificationError) => {
         logger.error({ buildId: canonicalData.buildId, error: notificationError }, 'Failed to send build-failed notification');
@@ -107,6 +132,7 @@ export function createBuildProcessor(dependencies: BuildProcessorDependencies) {
       logger.error({ jobId: job.id, buildId: canonicalData.buildId, error }, 'Build job failed');
       throw error;
     } finally {
+      clearInterval(cancelPoll);
       await dependencies.heartbeat?.setCurrentBuild(null);
     }
   };

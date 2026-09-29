@@ -13,6 +13,15 @@ export interface FastlaneBuildInput {
   buildNumber: string;
   releaseNotes: string;
   config: FastlaneProjectSnapshot;
+  /** Aborting stops the Fastlane process tree and rejects with a FastlaneCancelledError. */
+  signal?: AbortSignal;
+}
+
+export class FastlaneCancelledError extends Error {
+  constructor(message = 'Build was cancelled') {
+    super(message);
+    this.name = 'FastlaneCancelledError';
+  }
 }
 
 export interface FastlaneBuildResult {
@@ -173,18 +182,40 @@ export async function triggerFastlane(
   child.stdout.on('data', appendLog);
   child.stderr.on('data', appendLog);
 
+  const stopProcessTree = () => {
+    terminateProcessTree(child.pid, 'SIGTERM');
+    setTimeout(() => terminateProcessTree(child.pid, 'SIGKILL'), 10_000).unref();
+  };
+
   let timedOut = false;
   const timeout = setTimeout(() => {
     timedOut = true;
-    terminateProcessTree(child.pid, 'SIGTERM');
-    setTimeout(() => terminateProcessTree(child.pid, 'SIGKILL'), 10_000).unref();
+    stopProcessTree();
   }, env.BUILD_TIMEOUT_MS);
   timeout.unref();
+
+  let cancelled = false;
+  const onAbort = () => {
+    if (cancelled) return;
+    cancelled = true;
+    appendLog(Buffer.from('\n[autopush] Build cancelled by user; stopping Fastlane.\n'));
+    stopProcessTree();
+  };
+  if (input.signal?.aborted) {
+    onAbort();
+  } else {
+    input.signal?.addEventListener('abort', onAbort, { once: true });
+  }
 
   try {
     const exitCode = await new Promise<number>((resolve, reject) => {
       child.once('error', reject);
       child.once('close', (code, signal) => {
+        if (cancelled) {
+          reject(new FastlaneCancelledError());
+          return;
+        }
+
         if (timedOut) {
           reject(new Error(`Fastlane build exceeded ${env.BUILD_TIMEOUT_MS}ms timeout`));
           return;
@@ -211,6 +242,7 @@ export async function triggerFastlane(
     };
   } finally {
     clearTimeout(timeout);
+    input.signal?.removeEventListener('abort', onAbort);
     await writeChain.catch(() => undefined);
     await logWriter.close();
   }

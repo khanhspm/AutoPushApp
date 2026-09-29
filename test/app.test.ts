@@ -83,6 +83,9 @@ function context(
     async importProfile(_profileData, expectedBundleId) {
       return { bundleId: expectedBundleId ?? 'com.example.app', profiles: [], warnings: [], importedProfileUuid: 'imported-profile' };
     },
+    async inventory() {
+      return { profiles: [], certificates: [], warnings: [] };
+    },
     ...signingDiscoveryOverrides,
   };
   const database = createDatabase(':memory:');
@@ -106,6 +109,9 @@ function context(
     },
     async getCounts() {
       return { waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0, paused: 0 };
+    },
+    async remove() {
+      return true;
     },
     async close() {},
   };

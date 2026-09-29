@@ -1,10 +1,19 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../api/client'
-import type { Project, ProjectInput, RepositoryCandidate, SigningDiscoveryResult, SigningProfileCandidate, SigningProfileImportResult } from '../types'
+import type {
+  Project,
+  ProjectInput,
+  RepositoryCandidate,
+  SigningDiscoveryResult,
+  SigningInventory,
+  SigningInventoryProfile,
+  SigningProfileCandidate,
+  SigningProfileImportResult,
+} from '../types'
 import { ProjectFormPage } from './ProjectFormPage'
 
 vi.mock('../api/client', () => ({
@@ -14,6 +23,7 @@ vi.mock('../api/client', () => ({
     createProject: vi.fn(),
     updateProject: vi.fn(),
     discoverSigning: vi.fn(),
+    getSigningInventory: vi.fn(),
     chooseSigningProfile: vi.fn(),
     importSigningProfile: vi.fn(),
   },
@@ -100,6 +110,24 @@ function importedProfile(
   return { ...discovery(bundleId, profiles), importedProfileUuid }
 }
 
+const CERT_A = { name: 'Apple Distribution: Example Team', sha1Fingerprint: SHA1_A, kind: 'distribution' as const }
+const CERT_B = { name: 'Apple Distribution: Second Identity', sha1Fingerprint: SHA1_B, kind: 'distribution' as const }
+
+function inventoryProfile(overrides: Partial<SigningInventoryProfile> = {}): SigningInventoryProfile {
+  return { ...profile(), bundleId: 'com.example.app', ...overrides }
+}
+
+const APP_PROFILE = inventoryProfile()
+const WIDGET_PROFILE = inventoryProfile({
+  bundleId: 'com.example.widget',
+  profileName: 'Widget AdHoc',
+  uuid: '22222222-2222-4222-8222-222222222222',
+})
+
+function inventory(profiles: SigningInventoryProfile[] = [APP_PROFILE, WIDGET_PROFILE]): SigningInventory {
+  return { profiles, certificates: [CERT_A, CERT_B], warnings: [] }
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void
   let reject!: (reason?: unknown) => void
@@ -127,11 +155,11 @@ function renderPage(initialEntry = '/projects/new') {
 
 async function useManualSigning(user: ReturnType<typeof userEvent.setup>) {
   await user.selectOptions(screen.getByLabelText('Signing mode'), 'manual')
+  await screen.findAllByRole('option', { name: /com\.example\.app/ })
   return {
     team: screen.getByRole('textbox', { name: 'Apple Team ID' }),
-    certificate: screen.getByRole('textbox', { name: 'Signing certificate' }),
-    bundleId: screen.getByRole('textbox', { name: 'Bundle ID' }),
-    profileName: screen.getByRole('textbox', { name: 'Profile name' }),
+    certificate: screen.getByRole('combobox', { name: 'Signing certificate' }),
+    profile: (index: number) => screen.getByRole('combobox', { name: `Provisioning profile ${index}` }),
   }
 }
 
@@ -143,6 +171,7 @@ async function replaceText(user: ReturnType<typeof userEvent.setup>, element: HT
 beforeEach(() => {
   vi.resetAllMocks()
   vi.mocked(api.chooseRepository).mockResolvedValue(IOS_APP_REPOSITORY)
+  vi.mocked(api.getSigningInventory).mockResolvedValue(inventory())
 })
 
 afterEach(() => {
@@ -233,378 +262,147 @@ describe('ProjectFormPage repository picker', () => {
   })
 })
 
-describe('ProjectFormPage provisioning profile import', () => {
-  it('opens the API-host chooser and derives an empty bundle ID from the imported profile', async () => {
+
+describe('ProjectFormPage manual signing', () => {
+  it('lists installed profiles and fills bundle ID, team, and certificate from the chosen profile', async () => {
     const user = userEvent.setup()
-    vi.mocked(api.chooseSigningProfile).mockResolvedValue(importedProfile('com.example.app', [profile()]))
     renderPage()
     const fields = await useManualSigning(user)
 
-    expect(document.querySelector('input[type="file"]')).not.toBeInTheDocument()
-    expect(screen.getByText(/native file dialog opens on the Mac running the API/i)).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Choose .mobileprovision…' }))
+    expect(api.getSigningInventory).toHaveBeenCalled()
+    expect(fields.profile(1)).toHaveTextContent('com.example.app — Example App AdHoc (AB12CDEFGH')
+    expect(fields.profile(1)).toHaveTextContent('com.example.widget — Widget AdHoc')
+    expect(fields.certificate).toHaveTextContent('Apple Distribution: Example Team')
+    expect(fields.certificate).toHaveTextContent('Apple Distribution: Second Identity')
 
-    await waitFor(() => expect(api.chooseSigningProfile).toHaveBeenCalledWith(undefined))
-    expect(fields.bundleId).toHaveValue('com.example.app')
-    expect(fields.profileName).toHaveValue('Example App AdHoc')
+    await user.selectOptions(fields.profile(1), APP_PROFILE.uuid)
+
+    expect(screen.getByText('com.example.app', { selector: 'code' })).toBeInTheDocument()
     expect(fields.team).toHaveValue('AB12CDEFGH')
     expect(fields.certificate).toHaveValue(SHA1_A)
   })
 
-  it('passes a prefilled bundle ID as the expected ID', async () => {
+  it('lets the user pick another installed certificate', async () => {
     const user = userEvent.setup()
-    vi.mocked(api.chooseSigningProfile).mockResolvedValue(importedProfile('com.example.app', [profile()]))
     renderPage()
     const fields = await useManualSigning(user)
 
-    await user.type(fields.bundleId, 'com.example.app')
-    await user.click(screen.getByRole('button', { name: 'Choose .mobileprovision…' }))
+    await user.selectOptions(fields.profile(1), APP_PROFILE.uuid)
+    await user.selectOptions(fields.certificate, SHA1_B)
 
-    await waitFor(() => expect(api.chooseSigningProfile).toHaveBeenCalledWith('com.example.app'))
-    expect(fields.bundleId).toHaveValue('com.example.app')
-  })
-
-  it('applies the exact importedProfileUuid when the response contains multiple profiles', async () => {
-    const user = userEvent.setup()
-    const exactImported = profile({
-      profileName: 'Exact Imported Profile',
-      uuid: 'exact-imported-uuid',
-      teamId: 'EXACTTEAM1',
-      certificateCandidates: [{ name: 'Apple Distribution: Exact Team', sha1Fingerprint: SHA1_B, kind: 'distribution' }],
-      recommendedCertificate: { name: 'Apple Distribution: Exact Team', sha1Fingerprint: SHA1_B, kind: 'distribution' },
-    })
-    vi.mocked(api.chooseSigningProfile).mockResolvedValue(importedProfile(
-      'com.example.app',
-      [profile({ profileName: 'Older Installed Profile', uuid: 'older-profile-uuid' }), exactImported],
-      exactImported.uuid,
-    ))
-    renderPage()
-    const fields = await useManualSigning(user)
-
-    await user.click(screen.getByRole('button', { name: 'Choose .mobileprovision…' }))
-
-    expect(await screen.findByText('Exact Imported Profile')).toBeInTheDocument()
-    expect(fields.bundleId).toHaveValue('com.example.app')
-    expect(fields.profileName).toHaveValue('Exact Imported Profile')
-    expect(fields.team).toHaveValue('EXACTTEAM1')
     expect(fields.certificate).toHaveValue(SHA1_B)
+    expect(screen.getByText('Example App AdHoc does not include this certificate')).toBeInTheDocument()
   })
 
-  it('keeps manual values unchanged when native selection is cancelled', async () => {
+  it('rejects a second profile from a different team', async () => {
     const user = userEvent.setup()
-    vi.mocked(api.chooseSigningProfile).mockResolvedValue(null)
-    renderPage()
-    const fields = await useManualSigning(user)
-
-    await user.type(fields.team, 'MANUAL1234')
-    await replaceText(user, fields.certificate, 'Manual Certificate')
-    await user.type(fields.bundleId, 'com.example.app')
-    await user.type(fields.profileName, 'Manual Profile')
-    await user.click(screen.getByRole('button', { name: 'Choose .mobileprovision…' }))
-
-    await waitFor(() => expect(api.chooseSigningProfile).toHaveBeenCalledWith('com.example.app'))
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
-    expect(fields.bundleId).toHaveValue('com.example.app')
-    expect(fields.profileName).toHaveValue('Manual Profile')
-    expect(fields.team).toHaveValue('MANUAL1234')
-    expect(fields.certificate).toHaveValue('Manual Certificate')
-  })
-
-  it('reports import errors without changing manual values', async () => {
-    const user = userEvent.setup()
-    vi.mocked(api.chooseSigningProfile).mockRejectedValue(new Error('Profile bundle ID does not match'))
-    renderPage()
-    const fields = await useManualSigning(user)
-
-    await user.type(fields.team, 'MANUAL1234')
-    await replaceText(user, fields.certificate, 'Manual Certificate')
-    await user.type(fields.bundleId, 'com.example.app')
-    await user.type(fields.profileName, 'Manual Profile')
-    await user.click(screen.getByRole('button', { name: 'Choose .mobileprovision…' }))
-
-    expect(await screen.findByRole('alert')).toHaveTextContent('Could not import provisioning profile.')
-    expect(screen.getByRole('alert')).toHaveTextContent('Profile bundle ID does not match')
-    expect(fields.bundleId).toHaveValue('com.example.app')
-    expect(fields.profileName).toHaveValue('Manual Profile')
-    expect(fields.team).toHaveValue('MANUAL1234')
-    expect(fields.certificate).toHaveValue('Manual Certificate')
-  })
-
-  it('locks signing controls while import is pending so the completed install stays visible', async () => {
-    const user = userEvent.setup()
-    const pendingImport = deferred<SigningProfileImportResult | null>()
-    vi.mocked(api.chooseSigningProfile).mockReturnValue(pendingImport.promise)
-    renderPage()
-    const fields = await useManualSigning(user)
-
-    await user.type(fields.bundleId, 'com.example.original')
-    await user.click(screen.getByRole('button', { name: 'Choose .mobileprovision…' }))
-
-    expect(fields.bundleId).toBeDisabled()
-    expect(fields.profileName).toBeDisabled()
-    expect(fields.team).toBeDisabled()
-    expect(fields.certificate).toBeDisabled()
-    expect(screen.getByLabelText('Signing mode')).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Remove provisioning profile mapping 1' })).toBeDisabled()
-
-    await act(async () => {
-      pendingImport.resolve(importedProfile('com.example.original', [profile()]))
-      await pendingImport.promise
-    })
-
-    expect(fields.bundleId).toHaveValue('com.example.original')
-    expect(fields.profileName).toHaveValue('Example App AdHoc')
-    expect(fields.team).toHaveValue('AB12CDEFGH')
-    expect(fields.certificate).toHaveValue(SHA1_A)
-  })
-
-  it('submits imported values without UUID, row, or discovery metadata', async () => {
-    const user = userEvent.setup()
-    vi.mocked(api.chooseSigningProfile).mockResolvedValue(importedProfile('com.example.app', [profile()]))
-    renderPage()
-    const fields = await useManualSigning(user)
-
-    await user.type(screen.getByRole('textbox', { name: 'Project key' }), 'ios-app')
-    await user.type(screen.getByRole('textbox', { name: 'Display name' }), 'iOS App')
-    await user.click(screen.getByRole('button', { name: 'Choose folder…' }))
-    await screen.findByText(IOS_APP_REPOSITORY.path)
-    await user.type(screen.getByRole('textbox', { name: 'Firebase app ID' }), '1:123:ios:abc')
-    await user.type(screen.getByRole('textbox', { name: 'Firebase tester groups' }), 'qa')
-    await user.click(screen.getByRole('button', { name: 'Choose .mobileprovision…' }))
-    await waitFor(() => expect(fields.profileName).toHaveValue('Example App AdHoc'))
-
-    vi.mocked(api.createProject).mockResolvedValue(savedProject({
-      signingMode: 'manual',
-      appleTeamId: 'AB12CDEFGH',
-      signingCertificate: SHA1_A,
-      provisioningProfiles: [{ bundleId: 'com.example.app', profileName: 'Example App AdHoc', profileUuid: '11111111-1111-4111-8111-111111111111' }],
-    }))
-    await user.click(screen.getByRole('button', { name: 'Create project' }))
-
-    await waitFor(() => expect(api.createProject).toHaveBeenCalledTimes(1))
-    const submitted = vi.mocked(api.createProject).mock.calls[0][0]
-    expect(submitted).toMatchObject({
-      repoPath: IOS_APP_REPOSITORY.path,
-      signingMode: 'manual',
-      appleTeamId: 'AB12CDEFGH',
-      signingCertificate: SHA1_A,
-      provisioningProfiles: [{ bundleId: 'com.example.app', profileName: 'Example App AdHoc', profileUuid: '11111111-1111-4111-8111-111111111111' }],
-    })
-    expect(submitted.provisioningProfiles[0]).toEqual({ bundleId: 'com.example.app', profileName: 'Example App AdHoc', profileUuid: '11111111-1111-4111-8111-111111111111' })
-    expect(JSON.stringify(submitted)).not.toMatch(/rowId|discovery|importedProfileUuid|mobileprovision/)
-  })
-})
-
-describe('ProjectFormPage signing auto-detection', () => {
-  it('auto-fills the exact profile, team, and full recommended SHA-1', async () => {
-    const user = userEvent.setup()
-    vi.mocked(api.discoverSigning).mockResolvedValue(discovery('com.example.app', [profile()]))
-    renderPage()
-    const fields = await useManualSigning(user)
-
-    await user.type(fields.bundleId, 'com.example.app')
-    await user.click(screen.getByRole('button', { name: 'Auto detect' }))
-
-    expect(await screen.findByText('Detected Example App AdHoc')).toBeInTheDocument()
-    expect(fields.profileName).toHaveValue('Example App AdHoc')
-    expect(fields.team).toHaveValue('AB12CDEFGH')
-    expect(fields.certificate).toHaveValue(SHA1_A)
-    expect(api.discoverSigning).toHaveBeenCalledWith('com.example.app')
-  })
-
-  it('preserves manual values for multiple matches until a profile is explicitly applied', async () => {
-    const user = userEvent.setup()
-    const secondProfile = profile({
-      profileName: 'Example App AdHoc New',
-      uuid: 'profile-b',
-      teamId: 'TEAMTWO456',
-      teamName: 'Second Team',
-      certificateCandidates: [{ name: 'Apple Distribution: Second Team', sha1Fingerprint: SHA1_B, kind: 'distribution' }],
-      recommendedCertificate: { name: 'Apple Distribution: Second Team', sha1Fingerprint: SHA1_B, kind: 'distribution' },
-    })
-    vi.mocked(api.discoverSigning).mockResolvedValue(discovery('com.example.app', [
-      profile({ teamId: 'TEAMONE123' }),
-      secondProfile,
+    vi.mocked(api.getSigningInventory).mockResolvedValue(inventory([
+      APP_PROFILE,
+      inventoryProfile({ bundleId: 'com.other.app', profileName: 'Other AdHoc', uuid: 'other-uuid', teamId: 'DIFFTEAM12' }),
     ]))
     renderPage()
     const fields = await useManualSigning(user)
 
-    await user.type(fields.team, 'MANUAL1234')
-    await replaceText(user, fields.certificate, 'Manual Certificate')
-    await user.type(fields.bundleId, 'com.example.app')
-    await user.type(fields.profileName, 'Manual Profile')
-    await user.click(screen.getByRole('button', { name: 'Auto detect' }))
+    await user.selectOptions(fields.profile(1), APP_PROFILE.uuid)
+    await user.click(screen.getByRole('button', { name: 'Add profile' }))
+    await user.selectOptions(fields.profile(2), 'other-uuid')
 
-    const selector = await screen.findByRole('combobox', { name: 'Matching profile for com.example.app' })
-    expect(fields.team).toHaveValue('MANUAL1234')
-    expect(fields.certificate).toHaveValue('Manual Certificate')
-    expect(fields.profileName).toHaveValue('Manual Profile')
-
-    await user.selectOptions(selector, 'profile-b')
-    expect(fields.team).toHaveValue('MANUAL1234')
-    expect(fields.certificate).toHaveValue('Manual Certificate')
-    expect(fields.profileName).toHaveValue('Manual Profile')
-
-    await user.click(screen.getByRole('button', { name: 'Use selected profile' }))
-    expect(fields.team).toHaveValue('TEAMTWO456')
-    expect(fields.certificate).toHaveValue(SHA1_B)
-    expect(fields.profileName).toHaveValue('Example App AdHoc New')
+    expect(await screen.findByText('All provisioning profiles must use the same Apple Team ID (AB12CDEFGH)')).toBeInTheDocument()
+    expect(fields.team).toHaveValue('AB12CDEFGH')
+    expect(fields.profile(2)).toHaveValue('')
   })
 
-  it('preserves manual values when no profile matches or discovery fails', async () => {
+  it('rejects mapping the same bundle ID twice', async () => {
     const user = userEvent.setup()
-    vi.mocked(api.discoverSigning)
-      .mockResolvedValueOnce(discovery('com.example.app', []))
-      .mockRejectedValueOnce(new Error('Runner keychain unavailable'))
+    vi.mocked(api.getSigningInventory).mockResolvedValue(inventory([
+      APP_PROFILE,
+      inventoryProfile({ profileName: 'Example App AdHoc 2', uuid: 'second-app-uuid' }),
+    ]))
     renderPage()
     const fields = await useManualSigning(user)
 
-    await user.type(fields.team, 'MANUAL1234')
-    await replaceText(user, fields.certificate, 'Manual Certificate')
-    await user.type(fields.bundleId, 'com.example.app')
-    await user.type(fields.profileName, 'Manual Profile')
-    await user.click(screen.getByRole('button', { name: 'Auto detect' }))
+    await user.selectOptions(fields.profile(1), APP_PROFILE.uuid)
+    await user.click(screen.getByRole('button', { name: 'Add profile' }))
+    await user.selectOptions(fields.profile(2), 'second-app-uuid')
 
-    expect(await screen.findByText('No valid installed Ad Hoc profile found.')).toBeInTheDocument()
-    expect(fields.team).toHaveValue('MANUAL1234')
-    expect(fields.certificate).toHaveValue('Manual Certificate')
-    expect(fields.profileName).toHaveValue('Manual Profile')
-
-    await user.click(screen.getByRole('button', { name: 'Auto detect' }))
-    expect(await screen.findByText('Runner keychain unavailable')).toBeInTheDocument()
-    expect(fields.team).toHaveValue('MANUAL1234')
-    expect(fields.certificate).toHaveValue('Manual Certificate')
-    expect(fields.profileName).toHaveValue('Manual Profile')
+    expect(await screen.findByText('com.example.app is already mapped')).toBeInTheDocument()
+    expect(fields.profile(2)).toHaveValue('')
   })
 
-  it('rejects an invalid bundle ID without calling discovery', async () => {
+  it('imports a .mobileprovision file, refreshes the list, and selects the imported profile', async () => {
     const user = userEvent.setup()
+    const imported = inventoryProfile({ bundleId: 'com.example.new', profileName: 'New AdHoc', uuid: 'new-uuid' })
+    vi.mocked(api.getSigningInventory)
+      .mockResolvedValueOnce(inventory([APP_PROFILE]))
+      .mockResolvedValue(inventory([APP_PROFILE, imported]))
+    vi.mocked(api.chooseSigningProfile).mockResolvedValue(importedProfile('com.example.new', [imported]))
     renderPage()
     const fields = await useManualSigning(user)
 
-    await user.type(fields.bundleId, 'com.example.*')
-    await user.click(screen.getByRole('button', { name: 'Auto detect' }))
+    await user.click(screen.getByRole('button', { name: 'Import .mobileprovision…' }))
 
-    expect(await screen.findByText('Use a concrete bundle ID without wildcards')).toBeInTheDocument()
-    expect(api.discoverSigning).not.toHaveBeenCalled()
-  })
-
-  it('preserves the current certificate until one of multiple distribution identities is chosen', async () => {
-    const user = userEvent.setup()
-    vi.mocked(api.discoverSigning).mockResolvedValue(discovery('com.example.app', [profile({
-      certificateCandidates: [
-        { name: 'Apple Distribution: First', sha1Fingerprint: SHA1_A, kind: 'distribution' },
-        { name: 'Apple Distribution: Second', sha1Fingerprint: SHA1_B, kind: 'distribution' },
-      ],
-      recommendedCertificate: null,
-    })]))
-    renderPage()
-    const fields = await useManualSigning(user)
-
-    await replaceText(user, fields.certificate, 'Manual Certificate')
-    await user.type(fields.bundleId, 'com.example.app')
-    await user.click(screen.getByRole('button', { name: 'Auto detect' }))
-
-    const certificateSelector = await screen.findByRole('combobox', { name: 'Distribution certificate for com.example.app' })
-    expect(fields.certificate).toHaveValue('Manual Certificate')
-    await user.selectOptions(certificateSelector, SHA1_B)
-    expect(fields.certificate).toHaveValue('Manual Certificate')
-    await user.click(screen.getByRole('button', { name: 'Use certificate' }))
-    expect(fields.certificate).toHaveValue(SHA1_B)
-  })
-
-  it('ignores stale discovery after the bundle ID changes or its row is removed', async () => {
-    const user = userEvent.setup()
-    const first = deferred<SigningDiscoveryResult>()
-    const second = deferred<SigningDiscoveryResult>()
-    vi.mocked(api.discoverSigning)
-      .mockReturnValueOnce(first.promise)
-      .mockReturnValueOnce(second.promise)
-    renderPage()
-    const fields = await useManualSigning(user)
-
-    await user.type(fields.bundleId, 'com.example.app')
-    await user.click(screen.getByRole('button', { name: 'Auto detect' }))
-    await replaceText(user, fields.bundleId, 'com.example.changed')
-    await act(async () => {
-      first.resolve(discovery('com.example.app', [profile()]))
-      await first.promise
-    })
-
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Auto detect' })).toBeEnabled())
-    expect(screen.queryByText('Detected Example App AdHoc')).not.toBeInTheDocument()
-    expect(fields.profileName).toHaveValue('')
-    expect(fields.team).toHaveValue('')
-    expect(fields.certificate).toHaveValue('Apple Distribution')
-
-    await user.click(screen.getByRole('button', { name: 'Auto detect' }))
-    await user.click(screen.getByRole('button', { name: 'Remove provisioning profile mapping 1' }))
-    await act(async () => {
-      second.resolve(discovery('com.example.changed', [profile()]))
-      await second.promise
-    })
-
-    expect(screen.queryByRole('textbox', { name: 'Bundle ID' })).not.toBeInTheDocument()
-    expect(screen.queryByText('Detected Example App AdHoc')).not.toBeInTheDocument()
-    expect(screen.getByRole('textbox', { name: 'Apple Team ID' })).toHaveValue('')
-    expect(screen.getByRole('textbox', { name: 'Signing certificate' })).toHaveValue('Apple Distribution')
-  })
-
-  it('does not overwrite newer manual team or certificate edits with a late discovery result', async () => {
-    const user = userEvent.setup()
-    const pending = deferred<SigningDiscoveryResult>()
-    vi.mocked(api.discoverSigning).mockReturnValue(pending.promise)
-    renderPage()
-    const fields = await useManualSigning(user)
-
-    await user.type(fields.bundleId, 'com.example.app')
-    await user.click(screen.getByRole('button', { name: 'Auto detect' }))
-    await user.type(fields.team, 'MANUAL1234')
-    await replaceText(user, fields.certificate, 'Manual Certificate')
-    await act(async () => {
-      pending.resolve(discovery('com.example.app', [profile()]))
-      await pending.promise
-    })
-
-    expect(fields.team).toHaveValue('MANUAL1234')
-    expect(fields.certificate).toHaveValue('Manual Certificate')
-    expect(fields.profileName).toHaveValue('')
-    expect(screen.queryByText('Detected Example App AdHoc')).not.toBeInTheDocument()
-  })
-
-  it('blocks profiles from different teams from replacing project-global signing values', async () => {
-    const user = userEvent.setup()
-    vi.mocked(api.discoverSigning)
-      .mockResolvedValueOnce(discovery('com.example.app', [profile()]))
-      .mockResolvedValueOnce(discovery('com.example.extension', [profile({
-        profileName: 'Extension AdHoc',
-        uuid: 'extension-profile',
-        teamId: 'DIFFTEAM12',
-        certificateCandidates: [{ name: 'Apple Distribution: Other Team', sha1Fingerprint: SHA1_B, kind: 'distribution' }],
-        recommendedCertificate: { name: 'Apple Distribution: Other Team', sha1Fingerprint: SHA1_B, kind: 'distribution' },
-      })]))
-    renderPage()
-    const fields = await useManualSigning(user)
-
-    await user.type(fields.bundleId, 'com.example.app')
-    await user.click(screen.getByRole('button', { name: 'Auto detect' }))
-    await screen.findByText('Detected Example App AdHoc')
-    await user.click(screen.getByRole('button', { name: 'Add mapping' }))
-
-    const bundleInputs = screen.getAllByRole('textbox', { name: 'Bundle ID' })
-    const detectButtons = screen.getAllByRole('button', { name: 'Auto detect' })
-    await user.type(bundleInputs[1], 'com.example.extension')
-    await user.click(detectButtons[1])
-
-    expect(await screen.findByText('All provisioning profiles must use the same Apple Team ID')).toBeInTheDocument()
+    await waitFor(() => expect(fields.profile(1)).toHaveValue('new-uuid'))
+    expect(api.chooseSigningProfile).toHaveBeenCalledWith()
+    expect(screen.getByRole('status')).toHaveTextContent('Installed New AdHoc for com.example.new.')
     expect(fields.team).toHaveValue('AB12CDEFGH')
     expect(fields.certificate).toHaveValue(SHA1_A)
-    expect(screen.getAllByRole('textbox', { name: 'Profile name' })[1]).toHaveValue('')
   })
 
-  it('submits manual overrides without row or discovery metadata', async () => {
+  it('reports import errors without changing the selection', async () => {
     const user = userEvent.setup()
-    vi.mocked(api.discoverSigning).mockResolvedValue(discovery('com.example.app', [profile()]))
+    vi.mocked(api.chooseSigningProfile).mockRejectedValue(new Error('Profile is not Ad Hoc'))
+    renderPage()
+    const fields = await useManualSigning(user)
+
+    await user.selectOptions(fields.profile(1), APP_PROFILE.uuid)
+    await user.click(screen.getByRole('button', { name: 'Import .mobileprovision…' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Profile is not Ad Hoc')
+    expect(fields.profile(1)).toHaveValue(APP_PROFILE.uuid)
+  })
+
+  it('locks signing controls while an import is pending', async () => {
+    const user = userEvent.setup()
+    const pending = deferred<SigningProfileImportResult>()
+    vi.mocked(api.chooseSigningProfile).mockReturnValue(pending.promise)
+    renderPage()
+    const fields = await useManualSigning(user)
+
+    await user.click(screen.getByRole('button', { name: 'Import .mobileprovision…' }))
+
+    expect(await screen.findByRole('button', { name: 'Importing…' })).toBeDisabled()
+    expect(fields.profile(1)).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Add profile' })).toBeDisabled()
+
+    pending.reject(new Error('cancelled'))
+    await waitFor(() => expect(fields.profile(1)).toBeEnabled())
+  })
+
+  it('shows an error when installed signing assets cannot be loaded', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.getSigningInventory).mockRejectedValue(new Error('Runner keychain unavailable'))
+    renderPage()
+    await user.selectOptions(screen.getByLabelText('Signing mode'), 'manual')
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Runner keychain unavailable')
+  })
+
+  it('keeps saved mappings that are no longer installed', async () => {
+    vi.mocked(api.getProject).mockResolvedValue(savedProject({
+      signingMode: 'manual',
+      appleTeamId: 'AB12CDEFGH',
+      signingCertificate: 'Apple Distribution',
+      provisioningProfiles: [{ bundleId: 'com.legacy.app', profileName: 'Legacy AdHoc' }],
+    }))
+    renderPage('/projects/ios-app/edit')
+
+    const select = await screen.findByRole('combobox', { name: 'Provisioning profile 1' })
+    expect(select).toHaveDisplayValue('com.legacy.app — Legacy AdHoc (current, not in installed list)')
+    expect(screen.getByRole('combobox', { name: 'Signing certificate' })).toHaveDisplayValue('Apple Distribution (current)')
+  })
+
+  it('submits the selected profiles and certificate without form metadata', async () => {
+    const user = userEvent.setup()
     renderPage()
     const fields = await useManualSigning(user)
 
@@ -614,13 +412,9 @@ describe('ProjectFormPage signing auto-detection', () => {
     await screen.findByText(IOS_APP_REPOSITORY.path)
     await user.type(screen.getByRole('textbox', { name: 'Firebase app ID' }), '1:123:ios:abc')
     await user.type(screen.getByRole('textbox', { name: 'Firebase tester groups' }), 'qa, internal, qa')
-    await user.type(fields.bundleId, 'com.example.app')
-    await user.click(screen.getByRole('button', { name: 'Auto detect' }))
-    await screen.findByText('Detected Example App AdHoc')
-
-    await replaceText(user, fields.team, 'OVERRIDE12')
-    await replaceText(user, fields.certificate, SHA1_B)
-    await replaceText(user, fields.profileName, 'Manual Override Profile')
+    await user.selectOptions(fields.profile(1), APP_PROFILE.uuid)
+    await user.click(screen.getByRole('button', { name: 'Add profile' }))
+    await user.selectOptions(fields.profile(2), WIDGET_PROFILE.uuid)
 
     const expected: ProjectInput = {
       projectKey: 'ios-app',
@@ -637,24 +431,20 @@ describe('ProjectFormPage signing auto-detection', () => {
       appStoreConnectIssuerIdEnvVar: undefined,
       appStoreConnectKeyPathEnvVar: undefined,
       signingMode: 'manual',
-      appleTeamId: 'OVERRIDE12',
-      signingCertificate: SHA1_B,
-      provisioningProfiles: [{ bundleId: 'com.example.app', profileName: 'Manual Override Profile' }],
+      appleTeamId: 'AB12CDEFGH',
+      signingCertificate: SHA1_A,
+      provisioningProfiles: [
+        { bundleId: 'com.example.app', profileName: 'Example App AdHoc', profileUuid: APP_PROFILE.uuid },
+        { bundleId: 'com.example.widget', profileName: 'Widget AdHoc', profileUuid: WIDGET_PROFILE.uuid },
+      ],
       larkNotificationChatId: undefined,
       enabled: false,
     }
-    vi.mocked(api.createProject).mockResolvedValue({
-      ...expected,
-      version: 1,
-      validationStatus: 'valid',
-    })
+    vi.mocked(api.createProject).mockResolvedValue({ ...expected, version: 1, validationStatus: 'valid' })
 
     await user.click(screen.getByRole('button', { name: 'Create project' }))
 
     await waitFor(() => expect(api.createProject).toHaveBeenCalledWith(expected))
-    const submitted = vi.mocked(api.createProject).mock.calls[0][0]
-    expect(submitted.provisioningProfiles[0]).not.toHaveProperty('rowId')
-    expect(submitted).not.toHaveProperty('discoveryByRow')
-    expect(JSON.stringify(submitted)).not.toContain('11111111-1111-4111-8111-111111111111')
+    expect(JSON.stringify(vi.mocked(api.createProject).mock.calls[0][0])).not.toMatch(/rowId|importedProfileUuid/)
   })
 })

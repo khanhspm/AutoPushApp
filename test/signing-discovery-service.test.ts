@@ -444,6 +444,46 @@ describe('SigningDiscoveryService', () => {
     expect(runner.calls).toEqual([]);
   });
 
+  it('lists every eligible installed profile with its bundle id plus all signing certificates', async () => {
+    const runner = new FakeRunner();
+    addProfile(runner, 'app.mobileprovision', profile());
+    addProfile(runner, 'other.mobileprovision', profile({
+      Name: 'Other Ad Hoc',
+      UUID: '22222222-2222-4222-8222-222222222222',
+      Entitlements: { 'application-identifier': 'PREFIX1234.com.example.other', 'get-task-allow': false },
+    }));
+    addProfile(runner, 'wildcard.mobileprovision', profile({
+      UUID: '33333333-3333-4333-8333-333333333333',
+      Entitlements: { 'application-identifier': 'PREFIX1234.*', 'get-task-allow': false },
+    }));
+    addProfile(runner, 'expired.mobileprovision', profile({
+      UUID: '44444444-4444-4444-8444-444444444444',
+      ExpirationDate: new Date('2025-01-01T00:00:00.000Z'),
+    }));
+    runner.identities = [
+      identityLine(1, fingerprintTwo, 'Apple Development: Example Person (ZZ12CDEFGH)'),
+      identityLine(2, fingerprintOne, 'Apple Distribution: Example Company (AB12CDEFGH)'),
+      '  2 valid identities found',
+    ].join('\n');
+
+    const result = await service([
+      entry('app.mobileprovision'),
+      entry('other.mobileprovision'),
+      entry('wildcard.mobileprovision'),
+      entry('expired.mobileprovision'),
+    ], runner).inventory();
+
+    expect(result.profiles.map((item) => [item.bundleId, item.profileName, item.recommendedCertificate?.sha1Fingerprint]))
+      .toEqual([
+        ['com.example.app', 'Example Ad Hoc', fingerprintOne],
+        ['com.example.other', 'Other Ad Hoc', fingerprintOne],
+      ]);
+    expect(result.certificates.map((item) => [item.kind, item.sha1Fingerprint])).toEqual([
+      ['distribution', fingerprintOne],
+      ['development', fingerprintTwo],
+    ]);
+  });
+
   it('securely stages, validates, installs, rediscovers, and returns an imported profile', async () => {
     const homeDirectory = await temporaryHome();
     const runner = new FakeRunner();

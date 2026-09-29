@@ -136,6 +136,8 @@ td strong { color: #2e394b; font-size: 12px; }
 .status-succeeded .status-dot { background: var(--success); }
 .status-failed { color: #aa3440; background: var(--danger-soft); }
 .status-failed .status-dot { background: var(--danger); }
+.status-cancelled, .status-cancelling { color: #5b6472; background: #eef0f3; }
+.status-cancelled .status-dot, .status-cancelling .status-dot { background: #8a93a0; }
 .status-cancelled { color: #606c80; background: #eff1f4; }
 .queue-panel { display: flex; flex-direction: column; }
 .queue-visual { display: grid; place-items: center; padding: 22px 20px 14px; }
@@ -196,6 +198,7 @@ td strong { color: #2e394b; font-size: 12px; }
 .toggle-field input { position: absolute; opacity: 0; }.toggle { width: 34px; height: 19px; position: relative; flex: none; border-radius: 12px; background: #c8ced8; transition: background .2s; }.toggle::after { content: ""; position: absolute; top: 3px; left: 3px; width: 13px; height: 13px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.2); transition: transform .2s; }.toggle-field input:checked + .toggle { background: var(--accent); }.toggle-field input:checked + .toggle::after { transform: translateX(15px); }
 .form-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 18px 30px; background: #fafbfc; }
 .profile-mappings { display: flex; flex-direction: column; gap: 12px; }.profile-mappings-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }.profile-mappings-heading p { margin: 4px 0 0; color: var(--ink-muted); font-size: 9px; }.profile-mapping-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: end; gap: 10px; padding: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: #fafbfc; }.profile-remove { min-height: 42px; }
+.profile-mapping-row.profile-select-row { grid-template-columns: minmax(0, 1fr) auto; align-items: start; }.profile-select-row .profile-remove { margin-top: 20px; }.profile-select-hint { color: var(--ink-muted); font-size: 9px; }.profile-mappings-heading .field-action-buttons { width: auto; justify-content: flex-end; }
 .field-action-heading { min-height: 25px; display: flex; align-items: flex-start; flex-direction: column; gap: 6px; }.field-action-heading .button { min-height: 25px; padding: 4px 8px; }.field-action-buttons { display: flex; width: 100%; align-items: center; justify-content: flex-start; flex-wrap: wrap; gap: 5px; }
 .signing-discovery-panel { grid-column: 1 / -1; min-width: 0; padding: 12px; color: #45536a; border: 1px solid #cbd9f1; border-radius: 8px; background: #f4f7fd; font-size: 10px; line-height: 1.5; }.signing-discovery-panel.is-empty { color: #745918; border-color: #e6d49e; background: #fffaf0; }.signing-discovery-panel.is-error { color: #99343d; border-color: #f0cbd0; background: var(--danger-soft); }.signing-discovery-panel p { margin: 4px 0 0; }.signing-discovery-panel code { font-size: 9px; }
 .signing-discovery-title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 10px; }.signing-discovery-title strong { color: #34425a; }.signing-discovery-title span { color: var(--ink-muted); font-size: 9px; }

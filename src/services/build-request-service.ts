@@ -147,6 +147,34 @@ export class BuildRequestService {
     });
   }
 
+  /**
+   * Cancels a pending or running build. Pending builds become terminal immediately; running builds
+   * are flagged so the worker stops the Fastlane process tree and records the cancellation.
+   */
+  async cancel(buildId: string, requestedBy: string): Promise<BuildRecord> {
+    const build = this.builds.findById(buildId);
+    if (!build) {
+      throw new AppError(404, 'BUILD_NOT_FOUND', 'Build was not found');
+    }
+
+    const message = `Build was cancelled by ${requestedBy}`;
+    if (this.builds.cancelPending(buildId, message)) {
+      await this.queue.remove(build.queueJobId ?? build.id).catch((error) => {
+        logger.warn({ buildId, error }, 'Failed to remove cancelled build job from the queue');
+        return false;
+      });
+      logger.info({ buildId, requestedBy }, 'Cancelled pending build');
+      return this.builds.findById(buildId)!;
+    }
+
+    if (this.builds.requestCancel(buildId)) {
+      logger.info({ buildId, requestedBy }, 'Requested cancel for running build');
+      return this.builds.findById(buildId)!;
+    }
+
+    throw new AppError(409, 'BUILD_NOT_ACTIVE', 'Only queued or running builds can be cancelled');
+  }
+
   async reconcileEnqueueing(): Promise<void> {
     for (const build of this.builds.listStaleEnqueueing()) {
       const job: BuildJobDataV3 = {

@@ -39,6 +39,7 @@ export interface BuildRecordRow {
   queue_job_id: string | null;
   status: BuildStatus;
   failure_phase: string | null;
+  cancel_requested_at?: string | null;
   config_snapshot_json: string;
   retry_of_id: string | null;
   attempt_count: number;
@@ -67,6 +68,7 @@ export interface BuildRecord {
   queueJobId: string | null;
   status: BuildStatus;
   failurePhase: string | null;
+  cancelRequestedAt: string | null;
   configSnapshot: ProjectConfigSnapshot;
   retryOfId: string | null;
   attemptCount: number;
@@ -97,3 +99,5 @@ export interface BuildDashboardSummary {
   last24HoursFailed: number;
   recentBuilds: BuildRecord[];
 }
+
+export const CANCELLED_FAILURE_PHASE = 'cancelled';

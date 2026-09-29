@@ -43,6 +43,7 @@ function setup(queueOverrides: Partial<BuildQueueGateway> = {}) {
     enqueue: vi.fn(async (data: BuildJobDataV3) => ({ id: data.buildId })),
     getJob: vi.fn(async () => null),
     getCounts: vi.fn(async () => ({})),
+    remove: vi.fn(async () => true),
     close: vi.fn(async () => undefined),
     ...queueOverrides,
   };

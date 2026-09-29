@@ -5,6 +5,7 @@ import { projectLarkNotificationChatMigration } from './004-project-lark-notific
 import { buildAppVersionMigration } from './005-build-app-version';
 import { buildRequestedSchemeMigration } from './006-build-requested-scheme';
 import { cmsAuthMigration } from './007-cms-auth';
+import { buildCancelRequestMigration } from './008-build-cancel-request';
 import type { Migration } from './types';
 
 export const migrations: readonly Migration[] = [
@@ -15,6 +16,7 @@ export const migrations: readonly Migration[] = [
   buildAppVersionMigration,
   buildRequestedSchemeMigration,
   cmsAuthMigration,
+  buildCancelRequestMigration,
 ];
 
 export type { Migration } from './types';

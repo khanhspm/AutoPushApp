@@ -20,12 +20,13 @@ import type {
   RepositoryDiscoveryResult,
   Session,
   SigningDiscoveryResult,
+  SigningInventory,
   SigningProfileImportResult,
   User,
   UserCreateInput,
   UserUpdateInput,
 } from '../types'
-import { parseBuild, parseBuildDetail, parseBuilds, parseCmsAccess, parseCmsAccount, parseDashboard, parseProject, parseProjects, parseProjectSetup, parseProjectValidation, parseRepositoryChoice, parseRepositoryDiscovery, parseSession, parseSigningDiscovery, parseSigningProfileImport, parseUser, parseUsers } from './schemas'
+import { parseBuild, parseBuildDetail, parseBuilds, parseCmsAccess, parseCmsAccount, parseDashboard, parseProject, parseProjects, parseProjectSetup, parseProjectValidation, parseRepositoryChoice, parseRepositoryDiscovery, parseSession, parseSigningDiscovery, parseSigningInventory, parseSigningProfileImport, parseUser, parseUsers } from './schemas'
 
 export class ApiError extends Error {
   constructor(message: string, public readonly status: number, public readonly details?: unknown) {
@@ -131,6 +132,9 @@ export const api = {
   async setupAndValidateProject(projectKey: string): Promise<ProjectSetupResult> {
     return parseProjectSetup(await request(`/api/projects/${encodeURIComponent(projectKey)}/setup-and-validate`, { method: 'POST' }))
   },
+  async getSigningInventory(): Promise<SigningInventory> {
+    return parseSigningInventory(await request('/api/signing/inventory'))
+  },
   async discoverSigning(bundleId: string): Promise<SigningDiscoveryResult> {
     return parseSigningDiscovery(await request('/api/signing/discover', { method: 'POST', body: { bundleId } }))
   },
@@ -176,6 +180,9 @@ export const api = {
       throw new ApiError(nested?.message ?? 'Could not download build log', response.status, nested?.fields)
     }
     return response.blob()
+  },
+  async cancelBuild(id: string): Promise<Build> {
+    return parseBuild(await request(`/api/builds/${encodeURIComponent(id)}/cancel`, { method: 'POST' }))
   },
   async retryBuild(id: string, input: { appVersion?: string; scheme?: string; buildNumber?: string; releaseNotes?: string } = {}, idempotencyKey = createIdempotencyKey()): Promise<Build> {
     return parseBuild(await request(`/api/builds/${encodeURIComponent(id)}/retry`, { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: input }))
