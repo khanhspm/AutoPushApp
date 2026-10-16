@@ -3,6 +3,7 @@ import { logger } from '../utils/logger';
 import { sendLarkTextMessage } from './lark-service';
 
 export function notificationChatIdFor(job: BuildJobDataV3): string | null {
+  if (job.config.testBuild) return null;
   const projectChatId = job.config.schemaVersion === 2 ? job.config.larkNotificationChatId : null;
   return projectChatId
     ?? (job.request.source === 'lark' ? job.request.chatId ?? null : null);

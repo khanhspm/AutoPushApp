@@ -1,3 +1,4 @@
+import { git, lockRepository } from '../src/services/repository-operations-service';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -851,5 +852,52 @@ describe('CMS API', () => {
       project: { projectKey: 'SetupApp', validationStatus: 'valid' },
     });
     await app.close();
+  });
+});
+
+
+describe('CMS repository operations', () => {
+  it('shows Git history, checks out branches and rejects dirty worktrees', async () => {
+    const directory = await temporaryDirectory();
+    await git(directory, ['init', '-b', 'main']);
+    await git(directory, ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-m', 'Initial commit']);
+    await git(directory, ['branch', 'feature/build']);
+    const ctx = context();
+    ctx.projects.create(projectPayload({ repoPath: directory }) as unknown as ProjectInput);
+    const app = await buildApp(ctx);
+    const headers = { authorization: `Bearer ${env.CMS_ADMIN_TOKEN}` };
+    try {
+      const state = await app.inject({ method: 'GET', url: '/api/projects/RepositoryApp/git', headers });
+      expect(state.statusCode).toBe(200);
+      expect(state.json().branch).toBe('main');
+      expect(state.json().commits[0].subject).toBe('Initial commit');
+      const checkout = await app.inject({ method: 'POST', url: '/api/projects/RepositoryApp/git/checkout', headers, payload: { branch: 'feature/build' } });
+      expect(checkout.statusCode).toBe(200);
+      expect(checkout.json().branch).toBe('feature/build');
+      await fs.writeFile(path.join(directory, 'uncommitted'), 'change');
+      const dirty = await app.inject({ method: 'POST', url: '/api/projects/RepositoryApp/git/checkout', headers, payload: { branch: 'main' } });
+      expect(dirty.statusCode).toBe(409);
+      expect(dirty.json().error.code).toBe('REPOSITORY_DIRTY');
+    } finally { await app.close(); }
+  });
+  it('executes terminal commands in the repository and respects the worker lock', async () => {
+    const directory = await temporaryDirectory();
+    const ctx = context();
+    const app = await buildApp(ctx);
+    const headers = { authorization: `Bearer ${env.CMS_ADMIN_TOKEN}` };
+    try {
+      const unauthorized = await app.inject({ method: 'POST', url: '/api/repositories/terminal', payload: { repoPath: directory, commands: 'pwd' } });
+      expect(unauthorized.statusCode).toBe(401);
+      const result = await app.inject({ method: 'POST', url: '/api/repositories/terminal', headers, payload: { repoPath: directory, commands: 'pwd' } });
+      expect(result.statusCode).toBe(200);
+      expect(result.json().output.trim()).toBe(directory);
+      const unlock = await lockRepository(directory);
+      try {
+        const busy = await app.inject({ method: 'POST', url: '/api/repositories/terminal', headers, payload: { repoPath: directory, commands: 'pwd' } });
+        expect(busy.statusCode).toBe(409);
+      } finally { await unlock(); }
+      const clone = await app.inject({ method: 'POST', url: '/api/repositories/clone', headers, payload: { root: directory, name: '../escape', url: 'https://github.com/example/repo.git' } });
+      expect(clone.statusCode).toBe(400);
+    } finally { await app.close(); }
   });
 });

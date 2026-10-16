@@ -18,6 +18,11 @@ import { ProjectFormPage } from './ProjectFormPage'
 
 vi.mock('../api/client', () => ({
   api: {
+    getRepositoryFolders: vi.fn(),
+    getGit: vi.fn(),
+    runTerminal: vi.fn(),
+    cloneRepository: vi.fn(),
+    gitOperation: vi.fn(),
     chooseRepository: vi.fn(),
     getProject: vi.fn(),
     createProject: vi.fn(),
@@ -170,6 +175,7 @@ async function replaceText(user: ReturnType<typeof userEvent.setup>, element: HT
 
 beforeEach(() => {
   vi.resetAllMocks()
+  vi.mocked(api.getRepositoryFolders).mockResolvedValue({ roots: [], folders: [] })
   vi.mocked(api.chooseRepository).mockResolvedValue(IOS_APP_REPOSITORY)
   vi.mocked(api.getSigningInventory).mockResolvedValue(inventory())
 })

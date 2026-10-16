@@ -23,11 +23,11 @@ export function NewBuildPage() {
     setScheme(selectedProject?.scheme ?? '')
   }, [selectedProject?.projectKey])
   const trigger = useMutation({
-    mutationFn: ({ projectKey: targetProjectKey, ...input }: { projectKey: string; appVersion: string; scheme: string; buildNumber: string; releaseNotes?: string }) => api.triggerBuild(targetProjectKey, input),
+    mutationFn: ({ projectKey: targetProjectKey, ...input }: { projectKey: string; appVersion: string; scheme: string; buildNumber: string; releaseNotes?: string; testBuild?: boolean }) => api.triggerBuild(targetProjectKey, input),
     onSuccess: (build) => navigate(`/builds/${build.id}`),
   })
 
-  function submitBuild(event: FormEvent) {
+  function submitBuild(event: FormEvent, testBuild = false) {
     event.preventDefault()
     const nextErrors: Record<string, string> = {}
     if (!projectKey) nextErrors.projectKey = 'Select a project to build'
@@ -42,7 +42,7 @@ export function NewBuildPage() {
     }
 
     setErrors({})
-    trigger.mutate({ projectKey: selectedProject.projectKey, ...parsed.data })
+    trigger.mutate({ projectKey: selectedProject.projectKey, ...parsed.data, ...(testBuild ? { testBuild: true } : {}) })
   }
 
   if (projects.isLoading) return <LoadingState label="Loading projects" />
@@ -73,7 +73,7 @@ export function NewBuildPage() {
         </div>
       )}
 
-      <form className="new-build-grid" onSubmit={submitBuild}>
+      <form className="new-build-grid" onSubmit={(event) => submitBuild(event)}>
         <section className="panel build-composer">
           <div className="panel-header">
             <div><p className="panel-kicker">Build request</p><h2>Delivery inputs</h2></div>
@@ -128,6 +128,7 @@ export function NewBuildPage() {
           </div>
           <div className="form-actions">
             <Link className="button button-ghost" to="/builds">Cancel</Link>
+            <button type="button" className="button button-secondary" disabled={!selectedProject?.enabled || trigger.isPending} onClick={(event) => submitBuild(event, true)}>Test build (no Lark)</button>
             <button className="button button-primary" disabled={!selectedProject?.enabled || trigger.isPending}>
               {trigger.isPending ? 'Queuing…' : 'Queue build'}
             </button>

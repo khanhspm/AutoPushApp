@@ -77,6 +77,9 @@ export interface Project extends ProjectInput {
 }
 
 export interface ProjectConfigSnapshotV1 {
+  testBuild?: boolean;
+  gitCommit?: string;
+  gitBranch?: string;
   schemaVersion: 1;
   projectKey: string;
   displayName: string;
@@ -97,6 +100,9 @@ export interface ProjectConfigSnapshotV1 {
 }
 
 export interface ProjectConfigSnapshotV2 {
+  testBuild?: boolean;
+  gitCommit?: string;
+  gitBranch?: string;
   schemaVersion: 2;
   projectKey: string;
   displayName: string;

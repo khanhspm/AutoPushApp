@@ -4,6 +4,10 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    // Retire asset URLs whose earlier SPA fallback responses were cached as HTML.
+    assetsDir: 'assets/v2',
+  },
   server: {
     port: 5173,
     proxy: {

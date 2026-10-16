@@ -290,3 +290,7 @@ td strong { color: #2e394b; font-size: 12px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+.terminal-output { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 400px; overflow: auto; background: #101827; color: #e2e8f0; padding: 16px; border-radius: 8px; }
+.git-history { max-height: 420px; overflow: auto; }
+.git-history > div { padding: 10px 0; border-bottom: 1px solid #e2e8f0; }

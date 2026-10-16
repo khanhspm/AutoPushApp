@@ -45,6 +45,7 @@ export class ProjectSetupService implements ProjectSetupGateway {
     private readonly repositoryDiscovery: RepositoryCandidateResolver,
     private readonly bundler: BundlerGateway,
     private readonly projectConfig: ProjectConfigService,
+    private readonly acquireRepository?: (repo: string) => Promise<() => Promise<void>>,
   ) {}
 
   async setupAndValidate(projectKey: string): Promise<ProjectSetupResult> {
@@ -54,6 +55,7 @@ export class ProjectSetupService implements ProjectSetupGateway {
 
     let repositoryLock: string | null = null;
     let repositoryLockAcquired = false;
+    let unlock: (() => Promise<void>) | undefined;
     try {
       const project = this.projects.findByKey(projectKey);
       if (!project) throw new AppError(404, 'PROJECT_NOT_FOUND', 'Project was not found');
@@ -64,6 +66,7 @@ export class ProjectSetupService implements ProjectSetupGateway {
       this.activeRepositories.add(repositoryLock);
       repositoryLockAcquired = true;
 
+      unlock = await this.acquireRepository?.(repository.path);
       await this.ensureGitignore(repository.path);
       await this.bundler.configureLocalPath(repository.path);
 
@@ -97,6 +100,7 @@ export class ProjectSetupService implements ProjectSetupGateway {
 
       return { dependenciesInstalled, validation, project: recorded };
     } finally {
+      await unlock?.();
       if (repositoryLock && repositoryLockAcquired) this.activeRepositories.delete(repositoryLock);
       this.activeProjects.delete(projectLock);
     }

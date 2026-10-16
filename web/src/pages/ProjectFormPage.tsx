@@ -1,3 +1,4 @@
+import { RepositoryFolders } from '../components/RepositoryTools'
 import { FormEvent, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from 'react-router-dom'
@@ -248,6 +249,7 @@ export function ProjectFormPage() {
       <FormSection number="01" title="Identity & repository" description="Project identity and the runner-accessible checkout.">
         <TextField label="Project key" value={values.projectKey} error={errors.projectKey} disabled={editing} mono onChange={(v) => update('projectKey', v)} placeholder="ios-customer-app" />
         <TextField label="Display name" value={values.displayName} error={errors.displayName} onChange={(v) => update('displayName', v)} placeholder="Customer iOS" />
+        <RepositoryFolders value={values.repoPath} onChange={(value) => update('repoPath', value)} />
         <RepositoryPicker
           editing={editing}
           value={values.repoPath}

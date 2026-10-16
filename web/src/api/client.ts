@@ -86,7 +86,16 @@ export function createIdempotencyKey(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`
 }
 
+export interface GitState {
+  branch: string; head: string; dirty: boolean; branches: string[];
+  commits: { hash: string; author: string; date: string; subject: string }[];
+}
 export const api = {
+  async getGit(key: string): Promise<GitState> { return await request(`/api/projects/${encodeURIComponent(key)}/git`) as GitState },
+  async gitOperation(key: string, action: 'fetch' | 'checkout', branch: string): Promise<GitState> { return await request(`/api/projects/${encodeURIComponent(key)}/git/${action}`, { method: 'POST', ...(action === 'checkout' ? { body: { branch } } : {}) }) as GitState },
+  async runTerminal(repoPath: string, commands: string): Promise<{ output: string; exitCode: number; timedOut: boolean; truncated: boolean }> { return await request('/api/repositories/terminal', { method: 'POST', body: { repoPath, commands } }) as { output: string; exitCode: number; timedOut: boolean; truncated: boolean } },
+  async getRepositoryFolders(): Promise<{ roots: string[]; folders: { name: string; path: string }[] }> { return await request('/api/repositories/folders') as { roots: string[]; folders: { name: string; path: string }[] } },
+  async cloneRepository(root: string, name: string, url: string): Promise<RepositoryCandidate> { return parseRepositoryChoice(await request('/api/repositories/clone', { method: 'POST', body: { root, name, url } })) },
   async getSession(): Promise<Session> { return parseSession(await request('/api/session')) },
   async requestOtp(email: string): Promise<OtpRequestResult> {
     const payload = await request('/api/auth/otp/request', { method: 'POST', body: { email } })
@@ -147,7 +156,7 @@ export const api = {
     const query = queryString({ expectedBundleId })
     return parseSigningProfileImport(await binaryRequest(`/api/signing/import${query}`, file))
   },
-  async triggerBuild(projectKey: string, input: { appVersion: string; scheme: string; buildNumber: string; releaseNotes?: string }, idempotencyKey = createIdempotencyKey()): Promise<Build> {
+  async triggerBuild(projectKey: string, input: { appVersion: string; scheme: string; buildNumber: string; releaseNotes?: string; testBuild?: boolean }, idempotencyKey = createIdempotencyKey()): Promise<Build> {
     return parseBuild(await request(`/api/projects/${encodeURIComponent(projectKey)}/builds`, { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: input }))
   },
   async getUsers(): Promise<User[]> { return parseUsers(await request('/api/users')) },

@@ -1,3 +1,4 @@
+import { lockIdleRepository } from './services/repository-operations-service';
 import { buildApp } from './app';
 import type { AppContext } from './app-context';
 import { env } from './config/env';
@@ -43,9 +44,9 @@ export function createAppContext(): AppContext {
   const repositoryDiscovery = new RepositoryDiscoveryService(env.IOS_REPO_ROOTS);
   const bundler = new BundlerService();
   const projectConfig = new ProjectConfigService(projects, repositoryDiscovery, process.env, bundler);
-  const projectSetup = new ProjectSetupService(projects, repositoryDiscovery, bundler, projectConfig);
+  const projectSetup = new ProjectSetupService(projects, repositoryDiscovery, bundler, projectConfig, (repo) => lockIdleRepository(database, repo));
   const logs = new BuildLogService(env.LOG_DIR);
-  const buildRequests = new BuildRequestService(builds, users, projectConfig, queue);
+  const buildRequests = new BuildRequestService(builds, users, projectConfig, queue, true);
 
   return {
     database,

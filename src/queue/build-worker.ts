@@ -19,6 +19,7 @@ export interface BuildProcessorDependencies {
   builds: BuildRepository;
   logs: BuildLogService;
   heartbeat?: WorkerHeartbeat;
+  beforeBuild?: (config: BuildJobDataV3['config']) => Promise<() => Promise<void>>;
   /** How often a running build checks whether a cancel was requested. */
   cancelPollIntervalMs?: number;
 }
@@ -98,7 +99,9 @@ export function createBuildProcessor(dependencies: BuildProcessorDependencies) {
     }, dependencies.cancelPollIntervalMs ?? 2_000);
     cancelPoll.unref();
 
+    let unlock: (() => Promise<void>) | undefined;
     try {
+      unlock = await dependencies.beforeBuild?.(executionConfig);
       const result = await triggerFastlane(
         {
           buildId: canonicalData.buildId,
@@ -125,7 +128,7 @@ export function createBuildProcessor(dependencies: BuildProcessorDependencies) {
         logger.info({ jobId: job.id, buildId: canonicalData.buildId }, 'Build job cancelled');
         return;
       }
-      dependencies.builds.markFailed(canonicalData.buildId, errorMessage.slice(0, 1000), 'build', ['running'], expectedLogPath);
+      dependencies.builds.markFailed(canonicalData.buildId, errorMessage.slice(0, 1000), unlock || !dependencies.beforeBuild ? 'build' : 'validation', ['running'], unlock || !dependencies.beforeBuild ? expectedLogPath : undefined);
       await notifyBuildFailed(canonicalData).catch((notificationError) => {
         logger.error({ buildId: canonicalData.buildId, error: notificationError }, 'Failed to send build-failed notification');
       });
@@ -133,6 +136,7 @@ export function createBuildProcessor(dependencies: BuildProcessorDependencies) {
       throw error;
     } finally {
       clearInterval(cancelPoll);
+      await unlock?.();
       await dependencies.heartbeat?.setCurrentBuild(null);
     }
   };

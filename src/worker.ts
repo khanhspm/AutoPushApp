@@ -1,3 +1,7 @@
+import { ProjectRepository } from './repositories/project-repository';
+import { ProjectConfigService } from './services/project-config-service';
+import { RepositoryDiscoveryService } from './services/repository-discovery-service';
+import { createBuildPreflight } from './services/build-preflight-service';
 import { env } from './config/env';
 import { createMigratedDatabase } from './db/migrate';
 import { createRedisConnection } from './queue/build-queue';
@@ -11,10 +15,13 @@ async function main(): Promise<void> {
   const database = createMigratedDatabase(env.DB_PATH);
   const redis = createRedisConnection(env.REDIS_URL);
   const heartbeat = startWorkerHeartbeat(redis, env.RUNNER_ID);
+  const projects = new ProjectRepository(database);
+  const configService = new ProjectConfigService(projects, new RepositoryDiscoveryService(env.IOS_REPO_ROOTS));
   const worker = createBuildWorker(redis, {
     builds: new BuildRepository(database),
     logs: new BuildLogService(env.LOG_DIR),
     heartbeat,
+    beforeBuild: createBuildPreflight(projects, configService),
   });
 
   let closing = false;
