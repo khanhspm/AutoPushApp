@@ -103,6 +103,8 @@ platform :ios do
     gym_options[:configuration] = configuration unless configuration.to_s.empty?
     configure_signing(gym_options)
 
+    # AutoPushApp supplies GYM_ARCHIVE_PATH for per-attempt cleanup after this lane.
+    # Leave archive_path unset here so gym uses that managed path.
     gym(**gym_options)
 
     firebase_app_distribution(

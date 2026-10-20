@@ -50,4 +50,7 @@ if [[ -n "$FIREBASE_GROUPS" ]]; then
 fi
 
 BUNDLE_EXECUTABLE=${BUNDLE_BIN:-bundle}
+# Xcode may spend tens of seconds resolving packages and discovering destinations.
+# Fastlane's 3-second default can fail before it has read any build settings.
+export FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT=${FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT:-60}
 exec "$BUNDLE_EXECUTABLE" exec fastlane "${FASTLANE_ARGS[@]}"

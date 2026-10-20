@@ -1526,10 +1526,19 @@ bundle --version
 
 ### Fastlane timeout
 
+- Nếu lỗi là `xcodebuild -showBuildSettings timed out`, wrapper mặc định chờ 60 giây cho lần thử đầu (Fastlane mặc định chỉ 3 giây). Có thể đặt `FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT` và `FASTLANE_XCODEBUILD_SETTINGS_RETRIES` trong môi trường worker rồi restart worker; đây là timeout riêng với `BUILD_TIMEOUT_MS`.
 - Kiểm tra full build log.
 - Xác định Xcode đang chờ prompt, keychain unlock hoặc signing dialog không.
 - Kiểm tra network tới Git/Apple/Firebase.
 - Chỉ tăng `BUILD_TIMEOUT_MS` sau khi xác định build thật sự cần lâu hơn.
+
+### Kiểm tra trước build và tự dọn archive
+
+- Worker kiểm tra scheme yêu cầu bằng `xcodebuild -list -json` trước khi Fastlane thay đổi version/build number. Scheme sai sẽ bị chặn với danh sách scheme hợp lệ, thay vì tự đổi sang scheme khác. Repository cần một `.xcworkspace` (ưu tiên) hoặc một `.xcodeproj` tại thư mục gốc.
+- Cả **Test Build** và **Build** dùng một thư mục archive tạm riêng cho mỗi attempt, qua `GYM_ARCHIVE_PATH`. Fastfile/Gymfile tuỳ chỉnh phải tôn trọng biến này, không ghi đè `archive_path` sang nơi khác.
+- Sau khi Fastlane kết thúc (gồm export/upload), worker xoá archive tạm cả khi thành công, lỗi, timeout hoặc huỷ. IPA, log và các archive cũ/tạo thủ công được giữ nguyên. Kết quả cleanup được ghi vào build log; lỗi cleanup không đổi kết quả upload thành công.
+- Nếu worker bị `kill -9`, máy mất điện hoặc hệ điều hành dừng đột ngột, cleanup không thể chạy; thư mục tạm có prefix `autopush-archive-` có thể còn lại. Không tự quét/xoá toàn bộ Xcode Archives.
+- Preflight chặn lỗi cấu hình đã biết; compile, signing, mạng và dịch vụ bên ngoài vẫn có thể lỗi dù đã điền đủ thông tin.
 
 ### `Fastlane exited with code N`
 

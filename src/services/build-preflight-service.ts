@@ -2,8 +2,13 @@ import type { ProjectConfigSnapshot } from '../domain/project';
 import type { ProjectRepository } from '../repositories/project-repository';
 import type { ProjectConfigService } from './project-config-service';
 import { git, lockRepository } from './repository-operations-service';
+import { validateXcodeScheme } from './xcode-preflight-service';
 
-export function createBuildPreflight(projects: ProjectRepository, configService: ProjectConfigService) {
+export function createBuildPreflight(
+  projects: ProjectRepository,
+  configService: ProjectConfigService,
+  checkScheme = validateXcodeScheme,
+) {
   return async (config: ProjectConfigSnapshot): Promise<() => Promise<void>> => {
     const unlock = await lockRepository(config.repoPath);
     try {
@@ -12,6 +17,14 @@ export function createBuildPreflight(projects: ProjectRepository, configService:
         throw new Error('Project changed or was disabled; submit a new build');
       }
       const result = await configService.validate({ ...project, scheme: config.scheme });
+      if (result.valid) {
+        try {
+          await checkScheme(config.repoPath, config.scheme);
+        } catch (error) {
+          result.valid = false;
+          result.message = error instanceof Error ? error.message : 'Xcode scheme validation failed';
+        }
+      }
       const recorded = projects.setValidation(project.projectKey, result.valid ? 'valid' : 'invalid', result.message, project.version);
       if (!recorded) throw new Error('Project changed during pre-build validation; submit a new build');
       if (!result.valid) throw new Error(`Pre-build validation failed: ${result.message}`);
