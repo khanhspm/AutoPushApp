@@ -114,3 +114,12 @@ describe('project Lark notification routing', () => {
     expect(notificationChatIdFor(legacyJob)).toBe('oc_source_group');
   });
 });
+
+it('never sends success or failure messages for a test build, even with both chat destinations', async () => {
+  vi.mocked(sendLarkTextMessage).mockClear();
+  const data = job('lark', 'oc_project', 'oc_source');
+  data.config.testBuild = true;
+  await notifyBuildSucceeded(data);
+  await notifyBuildFailed(data);
+  expect(sendLarkTextMessage).not.toHaveBeenCalled();
+});

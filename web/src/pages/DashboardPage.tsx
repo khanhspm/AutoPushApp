@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { api } from '../api/client'
 import { formatBuildVersion, formatDuration, formatRelativeTime, titleCase } from '../lib/format'
-import { EmptyState, ErrorState, LoadingState, PageHeader, StatusBadge } from '../components/ui'
+import { EmptyState, ErrorState, LoadingState, PageHeader, StatusBadge, displayBuildStatus } from '../components/ui'
 
 function MetricCard({
   label,
@@ -69,7 +69,7 @@ export function DashboardPage() {
                           <td><Link className="table-link mono" to={`/builds/${build.id}`}>#{build.id.slice(0, 8)}</Link></td>
                           <td><strong>{build.projectName ?? build.projectKey}</strong></td>
                           <td><span className="source-cell"><span>Build {formatBuildVersion(build.appVersion, build.buildNumber)}</span><small>{titleCase(build.source)}</small></span></td>
-                          <td><StatusBadge status={build.status} /></td>
+                          <td><StatusBadge status={displayBuildStatus(build)} /></td>
                           <td>{formatDuration(build.durationMs)}</td>
                           <td title={build.createdAt}>{formatRelativeTime(build.createdAt)}</td>
                         </tr>

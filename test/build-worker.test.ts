@@ -34,6 +34,7 @@ describe('build worker payload integrity', () => {
       queueJobId: 'build-1',
       status: 'queued',
       failurePhase: null,
+      cancelRequestedAt: null,
       configSnapshot: {
         schemaVersion: 2,
         projectKey: 'manual-app',
@@ -125,6 +126,7 @@ describe('build worker payload integrity', () => {
       queueJobId: 'build-interrupted',
       status: 'running',
       failurePhase: null,
+      cancelRequestedAt: null,
       configSnapshot: {
         schemaVersion: 2,
         projectKey: 'manual-app',

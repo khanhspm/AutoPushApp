@@ -99,6 +99,7 @@ const projectUpdateSchema = z
   .object({ ...projectUpdateShape, version: z.number().int().positive() })
   .superRefine(validateManualSigning);
 const buildBodySchema = z.object({
+  testBuild: z.boolean().optional(),
   appVersion: z.string().trim().max(40).optional(),
   scheme: z.string().trim().min(1).max(120).regex(/^[A-Za-z0-9_. -]+$/),
   buildNumber: z.string().trim().min(1).max(80),
@@ -240,6 +241,7 @@ export function projectRoutes(context: AppContext): FastifyPluginAsync {
       const input = buildBodySchema.parse(request.body);
       const result = await context.buildRequests.submit({
         projectKey,
+        testBuild: input.testBuild,
         appVersion: input.appVersion,
         scheme: input.scheme,
         buildNumber: input.buildNumber,

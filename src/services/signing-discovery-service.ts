@@ -12,6 +12,8 @@ import type {
   SigningDiscoveryResult,
   SigningDiscoveryWarning,
   SigningDiscoveryWarningCode,
+  SigningInventory,
+  SigningInventoryProfile,
   SigningProfileCandidate,
   SigningProfileImportResult,
 } from '../domain/signing';
@@ -80,6 +82,7 @@ export interface SigningCommandRunner {
 export interface SigningDiscoveryGateway {
   discover(bundleId: string): Promise<SigningDiscoveryResult>;
   importProfile(profileData: Buffer, expectedBundleId?: string): Promise<SigningProfileImportResult>;
+  inventory(): Promise<SigningInventory>;
 }
 
 export interface SigningDiscoveryDependencies {
@@ -415,6 +418,21 @@ function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
+/** Newest expiry first; keeps one entry per profile UUID. */
+function sortAndDeduplicateProfiles<T extends SigningProfileCandidate>(profiles: T[]): T[] {
+  const sorted = [...profiles].sort((left, right) => (
+    Date.parse(right.expiresAt) - Date.parse(left.expiresAt)
+    || compareText(left.profileName, right.profileName)
+    || compareText(left.uuid, right.uuid)
+  ));
+  const seenUuids = new Set<string>();
+  return sorted.filter((profile) => {
+    if (seenUuids.has(profile.uuid)) return false;
+    seenUuids.add(profile.uuid);
+    return true;
+  });
+}
+
 function errorCode(error: unknown): string | undefined {
   return isRecord(error) && typeof error.code === 'string' ? error.code : undefined;
 }
@@ -646,12 +664,24 @@ export class SigningDiscoveryService implements SigningDiscoveryGateway {
   }
 
   async discover(bundleId: string): Promise<SigningDiscoveryResult> {
-    const operation = this.discoveryTail.then(() => this.discoverSerialized(bundleId));
+    return this.serialized(() => this.discoverSerialized(bundleId));
+  }
+
+  async inventory(): Promise<SigningInventory> {
+    return this.serialized(() => this.inventorySerialized());
+  }
+
+  private serialized<T>(run: () => Promise<T>): Promise<T> {
+    const operation = this.discoveryTail.then(run);
     this.discoveryTail = operation.then(() => undefined, () => undefined);
     return operation;
   }
 
-  private async discoverSerialized(bundleId: string): Promise<SigningDiscoveryResult> {
+  /** Decodes every installed profile and returns the ones accepted by `select`. */
+  private async scanInstalledProfiles<T>(
+    warnings: Map<SigningDiscoveryWarningCode, SigningDiscoveryWarning>,
+    select: (metadata: ParsedProfileMetadata, now: Date) => T | null,
+  ): Promise<T[]> {
     if (this.platform !== 'darwin') {
       throw new AppError(501, 'SIGNING_DISCOVERY_UNSUPPORTED', 'Signing discovery is available only on macOS');
     }
@@ -661,75 +691,96 @@ export class SigningDiscoveryService implements SigningDiscoveryGateway {
     try {
       entries = await this.fileSystem.readdir(profileDirectory, { withFileTypes: true });
     } catch (error) {
-      if (errorCode(error) === 'ENOENT') return { bundleId, profiles: [], warnings: [] };
+      if (errorCode(error) === 'ENOENT') return [];
       throw new AppError(503, 'SIGNING_DISCOVERY_FAILED', 'Unable to inspect installed signing profiles');
     }
 
     const profileEntries = entries
       .filter((entry) => entry.name.endsWith('.mobileprovision') && entry.isFile() && !entry.isSymbolicLink())
       .sort((left, right) => compareText(left.name, right.name));
-    const warnings = new Map<SigningDiscoveryWarningCode, SigningDiscoveryWarning>();
     if (profileEntries.length > maxInstalledProfiles) addWarning(warnings, 'PROFILE_SCAN_TRUNCATED');
     const profilePaths = profileEntries
       .slice(0, maxInstalledProfiles)
       .map((entry) => path.join(profileDirectory, entry.name));
-    if (profilePaths.length === 0) return { bundleId, profiles: [], warnings: orderedWarnings(warnings) };
+    if (profilePaths.length === 0) return [];
 
     const discoveryTime = this.now();
-    const decoded = await mapWithConcurrency(profilePaths, profileConcurrency, async (profilePath): Promise<DecodeResult> => {
-      let xml: string;
-      try {
-        ({ stdout: xml } = await this.commandRunner.run(
-          securityPath,
-          ['cms', '-D', '-i', profilePath],
-          { timeoutMs: commandTimeoutMs, maxBuffer: commandMaxBuffer },
-        ));
-      } catch {
-        return { parsedProfile: null, warningCode: 'PROFILE_DECODE_FAILED' };
-      }
+    const decoded = await mapWithConcurrency(
+      profilePaths,
+      profileConcurrency,
+      async (profilePath): Promise<{ value: T | null; warningCode?: SigningDiscoveryWarningCode }> => {
+        let xml: string;
+        try {
+          ({ stdout: xml } = await this.commandRunner.run(
+            securityPath,
+            ['cms', '-D', '-i', profilePath],
+            { timeoutMs: commandTimeoutMs, maxBuffer: commandMaxBuffer },
+          ));
+        } catch {
+          return { value: null, warningCode: 'PROFILE_DECODE_FAILED' };
+        }
 
-      let parsedValue: unknown;
-      try {
-        parsedValue = parsePlist(xml);
-      } catch {
-        return { parsedProfile: null, warningCode: 'PROFILE_DECODE_FAILED' };
-      }
+        let parsedValue: unknown;
+        try {
+          parsedValue = parsePlist(xml);
+        } catch {
+          return { value: null, warningCode: 'PROFILE_DECODE_FAILED' };
+        }
 
-      try {
-        const parsed = parseProfile(parsedValue, bundleId, discoveryTime);
-        if (parsed.status === 'eligible') return { parsedProfile: parsed.parsedProfile };
-        if (parsed.status === 'excluded') return { parsedProfile: null };
-        return { parsedProfile: null, warningCode: 'PROFILE_INVALID' };
-      } catch {
-        return { parsedProfile: null, warningCode: 'PROFILE_INVALID' };
-      }
-    });
+        try {
+          const parsed = parseProfileMetadata(parsedValue);
+          if (parsed.status === 'invalid') return { value: null, warningCode: 'PROFILE_INVALID' };
+          return { value: select(parsed.metadata, discoveryTime) };
+        } catch {
+          return { value: null, warningCode: 'PROFILE_INVALID' };
+        }
+      },
+    );
 
-    const eligibleProfiles: ParsedProfile[] = [];
+    const selected: T[] = [];
     for (const result of decoded) {
       if (result.warningCode) addWarning(warnings, result.warningCode);
-      if (result.parsedProfile) eligibleProfiles.push(result.parsedProfile);
+      if (result.value !== null) selected.push(result.value);
     }
+    return selected;
+  }
+
+  private async discoverSerialized(bundleId: string): Promise<SigningDiscoveryResult> {
+    const warnings = new Map<SigningDiscoveryWarningCode, SigningDiscoveryWarning>();
+    const eligibleProfiles = await this.scanInstalledProfiles(warnings, (metadata, now) => (
+      profileEligibility(metadata, now, bundleId).status === 'eligible' ? parsedProfileFromMetadata(metadata) : null
+    ));
     if (eligibleProfiles.length === 0) {
       return { bundleId, profiles: [], warnings: orderedWarnings(warnings) };
     }
 
     const identities = await this.inspectIdentities(warnings);
-    const profiles = eligibleProfiles.map((parsedProfile) => buildProfileCandidate(parsedProfile, identities));
+    const profiles = sortAndDeduplicateProfiles(
+      eligibleProfiles.map((parsedProfile) => buildProfileCandidate(parsedProfile, identities)),
+    );
+    return { bundleId, profiles, warnings: orderedWarnings(warnings) };
+  }
 
-    profiles.sort((left, right) => (
-      Date.parse(right.expiresAt) - Date.parse(left.expiresAt)
-      || compareText(left.profileName, right.profileName)
-      || compareText(left.uuid, right.uuid)
-    ));
-
-    const seenUuids = new Set<string>();
-    const deduplicatedProfiles = profiles.filter((profile) => {
-      if (seenUuids.has(profile.uuid)) return false;
-      seenUuids.add(profile.uuid);
-      return true;
+  private async inventorySerialized(): Promise<SigningInventory> {
+    const warnings = new Map<SigningDiscoveryWarningCode, SigningDiscoveryWarning>();
+    const eligibleProfiles = await this.scanInstalledProfiles(warnings, (metadata, now) => {
+      const eligibility = profileEligibility(metadata, now, undefined, true);
+      return eligibility.status === 'eligible'
+        ? { bundleId: eligibility.bundleId, parsedProfile: parsedProfileFromMetadata(metadata) }
+        : null;
     });
-
-    return { bundleId, profiles: deduplicatedProfiles, warnings: orderedWarnings(warnings) };
+    const identities = await this.inspectIdentities(warnings);
+    const profiles = sortAndDeduplicateProfiles(
+      eligibleProfiles.map(({ bundleId, parsedProfile }): SigningInventoryProfile => ({
+        ...buildProfileCandidate(parsedProfile, identities),
+        bundleId,
+      })),
+    ).sort((left, right) => compareText(left.bundleId, right.bundleId));
+    const certificates = [...identities.values()].sort((left, right) => (
+      Number(right.kind === 'distribution') - Number(left.kind === 'distribution')
+      || compareText(left.name, right.name)
+      || compareText(left.sha1Fingerprint, right.sha1Fingerprint)
+    ));
+    return { profiles, certificates, warnings: orderedWarnings(warnings) };
   }
 }

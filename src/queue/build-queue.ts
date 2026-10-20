@@ -9,6 +9,8 @@ export interface BuildQueueGateway {
   enqueue(data: BuildJobDataV3): Promise<{ id: string }>;
   getJob(buildId: string): Promise<Job<BuildJobDataV3> | null>;
   getCounts(): Promise<Record<string, number>>;
+  /** Removes a waiting job. Returns false when the job is missing or already locked by a worker. */
+  remove(jobId: string): Promise<boolean>;
   close(): Promise<void>;
 }
 
@@ -33,6 +35,16 @@ export function createBuildQueue(connection: IORedis): BuildQueueGateway {
     },
     async getJob(buildId) {
       return (await queue.getJob(buildId)) ?? null;
+    },
+    async remove(jobId) {
+      const job = await queue.getJob(jobId);
+      if (!job) return false;
+      try {
+        await job.remove();
+        return true;
+      } catch {
+        return false;
+      }
     },
     getCounts() {
       return queue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed', 'paused');

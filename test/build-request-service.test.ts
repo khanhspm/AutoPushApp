@@ -1,3 +1,7 @@
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { lockIdleRepository, lockRepository } from '../src/services/repository-operations-service';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createDatabase, type AppDatabase } from '../src/db/database';
@@ -43,6 +47,7 @@ function setup(queueOverrides: Partial<BuildQueueGateway> = {}) {
     enqueue: vi.fn(async (data: BuildJobDataV3) => ({ id: data.buildId })),
     getJob: vi.fn(async () => null),
     getCounts: vi.fn(async () => ({})),
+    remove: vi.fn(async () => true),
     close: vi.fn(async () => undefined),
     ...queueOverrides,
   };
@@ -55,6 +60,7 @@ function setup(queueOverrides: Partial<BuildQueueGateway> = {}) {
     builds,
     config,
     users,
+    projectConfig,
     queue,
     service: new BuildRequestService(builds, users, projectConfig, queue),
   };
@@ -247,4 +253,34 @@ describe('build request app versions and terminal notifications', () => {
       build: { appVersion: '1.2', buildNumber: '4' },
     });
   });
+});
+
+it('persists test mode through retry and does not leak it to subsequent normal builds', async () => {
+  const { service, builds } = setup();
+  const input = { projectKey: 'MyApp', appVersion: '1.1', buildNumber: '1', source: 'cms' as const, requestedBy: 'cms-admin' };
+  const first = await service.submit({ ...input, testBuild: true, idempotencyKey: 'test-build-1' });
+  expect(first.build.configSnapshot.testBuild).toBe(true);
+  builds.markFailed(first.build.id, 'failed', 'build', ['queued']);
+  const retry = await service.retry(first.build.id, 'test-retry-1', 'cms-admin');
+  expect(retry.build.configSnapshot.testBuild).toBe(true);
+  const normal = await service.submit({ ...input, idempotencyKey: 'normal-build-1' });
+  expect(normal.build.configSnapshot.testBuild).toBe(false);
+});
+
+
+it('releases the submission lock before dispatch while the database blocks terminal mutations', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'autopush-submit-'));
+  try {
+    const fixture = setup();
+    fixture.config.repoPath = await fs.realpath(dir);
+    vi.mocked(fixture.queue.enqueue).mockImplementation(async (data) => {
+      const unlock = await lockRepository(dir);
+      await unlock();
+      await expect(lockIdleRepository(fixture.database, fixture.config.repoPath)).rejects.toThrow('queued and running');
+      return { id: data.buildId };
+    });
+    const service = new BuildRequestService(fixture.builds, fixture.users, fixture.projectConfig, fixture.queue, true);
+    const result = await service.submit({ projectKey: 'MyApp', appVersion: '1.1', buildNumber: '1', source: 'cms', requestedBy: 'admin', idempotencyKey: 'protected-build' });
+    expect(result.build.status).toBe('queued');
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });

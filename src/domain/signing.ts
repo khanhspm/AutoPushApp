@@ -39,3 +39,14 @@ export interface SigningDiscoveryResult {
 export interface SigningProfileImportResult extends SigningDiscoveryResult {
   importedProfileUuid: string;
 }
+
+export interface SigningInventoryProfile extends SigningProfileCandidate {
+  bundleId: string;
+}
+
+/** Everything installed on the runner that can be picked for manual ad-hoc signing. */
+export interface SigningInventory {
+  profiles: SigningInventoryProfile[];
+  certificates: SigningCertificateCandidate[];
+  warnings: SigningDiscoveryWarning[];
+}

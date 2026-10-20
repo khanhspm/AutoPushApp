@@ -25,6 +25,13 @@ export function PageHeader({
   )
 }
 
+/** Cancelled builds are stored as failed with failurePhase "cancelled". */
+export function displayBuildStatus(build: { status: BuildStatus | string; failurePhase?: string | null; cancelRequestedAt?: string | null }): string {
+  if (build.status === 'failed' && build.failurePhase === 'cancelled') return 'cancelled'
+  if (build.status === 'running' && build.cancelRequestedAt) return 'cancelling'
+  return build.status
+}
+
 export function StatusBadge({ status }: { status: BuildStatus | string }) {
   const normalized = status === 'success' ? 'succeeded' : status
   return (

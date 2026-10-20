@@ -40,6 +40,7 @@ function mapBuild(row: BuildRecordRow): BuildRecord {
     queueJobId: row.queue_job_id,
     status: row.status,
     failurePhase: row.failure_phase,
+    cancelRequestedAt: row.cancel_requested_at ?? null,
     configSnapshot: JSON.parse(row.config_snapshot_json) as ProjectConfigSnapshot,
     retryOfId: row.retry_of_id,
     attemptCount: row.attempt_count,
@@ -180,6 +181,46 @@ export class BuildRepository {
         `)
         .run(failurePhase, message, logRelativePath ?? null, id, ...allowedStatuses).changes === 1
     );
+  }
+
+  /** Cancels a build that has not started yet. Returns false when the build is no longer pending. */
+  cancelPending(id: string, message: string): boolean {
+    return (
+      this.database
+        .prepare(`
+          UPDATE build_records
+          SET status = 'failed', failure_phase = 'cancelled', error_message = ?,
+              cancel_requested_at = COALESCE(cancel_requested_at, CURRENT_TIMESTAMP),
+              finished_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+          WHERE id = ? AND status IN ('enqueueing', 'queued')
+        `)
+        .run(message, id).changes === 1
+    );
+  }
+
+  /** Flags a running build so the worker stops its Fastlane process. */
+  requestCancel(id: string): boolean {
+    return (
+      this.database
+        .prepare(`
+          UPDATE build_records
+          SET cancel_requested_at = COALESCE(cancel_requested_at, CURRENT_TIMESTAMP),
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = ? AND status = 'running'
+        `)
+        .run(id).changes === 1
+    );
+  }
+
+  isCancelRequested(id: string): boolean {
+    const row = this.database
+      .prepare('SELECT cancel_requested_at FROM build_records WHERE id = ?')
+      .get(id) as { cancel_requested_at: string | null } | undefined;
+    return Boolean(row?.cancel_requested_at);
+  }
+
+  markCancelled(id: string, message: string, logRelativePath?: string | null): boolean {
+    return this.markFailed(id, message, 'cancelled', ['running'], logRelativePath);
   }
 
   list(options: BuildListOptions = {}): BuildListResult {

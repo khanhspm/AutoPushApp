@@ -1,4 +1,7 @@
+import { git, lockRepository } from './repository-operations-service';
 import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 
 import { z } from 'zod';
 
@@ -17,6 +20,7 @@ const schemeSchema = z.string().trim().min(1).max(120).regex(/^[A-Za-z0-9_. -]+$
 const releaseNotesSchema = z.string().trim().max(10_000).default('');
 
 export interface SubmitBuildInput {
+  testBuild?: boolean;
   projectKey: string;
   appVersion?: string | null;
   scheme?: string | null;
@@ -40,6 +44,7 @@ export class BuildRequestService {
     private readonly users: UserRepository,
     private readonly projects: ProjectConfigService,
     private readonly queue: BuildQueueGateway,
+    private readonly protectRepository = false,
   ) {}
 
   async submit(input: SubmitBuildInput): Promise<SubmitBuildResult> {
@@ -63,56 +68,71 @@ export class BuildRequestService {
       throw new AppError(403, 'PROJECT_BUILD_FORBIDDEN', 'You do not have build permission for this project');
     }
 
-    const config = await this.projects.resolveForBuild(input.projectKey);
-    const buildId = crypto.randomUUID();
-    const request = {
-      appVersion,
-      scheme: requestedScheme,
-      buildNumber,
-      releaseNotes,
-      source: input.source,
-      requestedBy: input.requestedBy,
-      chatId: input.chatId ?? null,
-    };
-
-    let build: BuildRecord;
+    let config = await this.projects.resolveForBuild(input.projectKey);
+    let unlock = this.protectRepository ? await lockRepository(config.repoPath) : undefined;
     try {
-      build = this.builds.createEnqueueing({
-        id: buildId,
-        projectId: config.projectKey,
+      if (this.protectRepository) {
+        config = await this.projects.resolveForBuild(input.projectKey);
+        if (await fs.stat(path.join(config.repoPath, '.git')).catch(() => null)) {
+          config = { ...config, gitCommit: await git(config.repoPath, ['rev-parse', 'HEAD']), gitBranch: await git(config.repoPath, ['rev-parse', '--abbrev-ref', 'HEAD']) };
+        }
+      }
+      config = { ...config, testBuild: input.testBuild === true };
+      const buildId = crypto.randomUUID();
+      const request = {
+        appVersion,
+        scheme: requestedScheme,
+        buildNumber,
+        releaseNotes,
+        source: input.source,
+        requestedBy: input.requestedBy,
+        chatId: input.chatId ?? null,
+      };
+
+      let build: BuildRecord;
+      try {
+        build = this.builds.createEnqueueing({
+          id: buildId,
+          projectId: config.projectKey,
+          config,
+          request,
+          idempotencyKey: input.idempotencyKey,
+          retryOfId: input.retryOfId,
+        });
+      } catch (error) {
+        const raced = this.builds.findByIdempotencyKey(input.idempotencyKey);
+        if (raced) {
+          return { build: raced, created: false };
+        }
+        throw error;
+      }
+
+      // The persisted enqueueing record now blocks repository mutations. Release the
+      // filesystem lock before publishing so a fast worker can acquire it immediately.
+      await unlock?.();
+      unlock = undefined;
+
+      const jobData: BuildJobDataV3 = {
+        schemaVersion: 3,
+        buildId,
         config,
         request,
-        idempotencyKey: input.idempotencyKey,
-        retryOfId: input.retryOfId,
-      });
-    } catch (error) {
-      const raced = this.builds.findByIdempotencyKey(input.idempotencyKey);
-      if (raced) {
-        return { build: raced, created: false };
+      };
+
+      try {
+        const job = await this.queue.enqueue(jobData);
+        this.builds.markQueued(buildId, job.id);
+        build = this.builds.findById(buildId)!;
+        return { build, created: true };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.builds.markEnqueueFailed(buildId, message.slice(0, 500));
+        await notifyBuildFailed(jobData).catch((notificationError) => {
+          logger.error({ buildId, error: notificationError }, 'Failed to send enqueue-failed notification');
+        });
+        return { build: this.builds.findById(buildId)!, created: true };
       }
-      throw error;
-    }
-
-    const jobData: BuildJobDataV3 = {
-      schemaVersion: 3,
-      buildId,
-      config,
-      request,
-    };
-
-    try {
-      const job = await this.queue.enqueue(jobData);
-      this.builds.markQueued(buildId, job.id);
-      build = this.builds.findById(buildId)!;
-      return { build, created: true };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.builds.markEnqueueFailed(buildId, message.slice(0, 500));
-      await notifyBuildFailed(jobData).catch((notificationError) => {
-        logger.error({ buildId, error: notificationError }, 'Failed to send enqueue-failed notification');
-      });
-      return { build: this.builds.findById(buildId)!, created: true };
-    }
+    } finally { await unlock?.(); }
   }
 
   async retry(
@@ -136,6 +156,7 @@ export class BuildRequestService {
 
     return this.submit({
       projectKey: original.projectKey,
+      testBuild: original.configSnapshot.testBuild,
       appVersion: overrides.appVersion ?? original.appVersion,
       scheme: overrides.scheme ?? original.requestedScheme,
       buildNumber: overrides.buildNumber ?? original.buildNumber,
@@ -145,6 +166,34 @@ export class BuildRequestService {
       idempotencyKey,
       retryOfId: original.id,
     });
+  }
+
+  /**
+   * Cancels a pending or running build. Pending builds become terminal immediately; running builds
+   * are flagged so the worker stops the Fastlane process tree and records the cancellation.
+   */
+  async cancel(buildId: string, requestedBy: string): Promise<BuildRecord> {
+    const build = this.builds.findById(buildId);
+    if (!build) {
+      throw new AppError(404, 'BUILD_NOT_FOUND', 'Build was not found');
+    }
+
+    const message = `Build was cancelled by ${requestedBy}`;
+    if (this.builds.cancelPending(buildId, message)) {
+      await this.queue.remove(build.queueJobId ?? build.id).catch((error) => {
+        logger.warn({ buildId, error }, 'Failed to remove cancelled build job from the queue');
+        return false;
+      });
+      logger.info({ buildId, requestedBy }, 'Cancelled pending build');
+      return this.builds.findById(buildId)!;
+    }
+
+    if (this.builds.requestCancel(buildId)) {
+      logger.info({ buildId, requestedBy }, 'Requested cancel for running build');
+      return this.builds.findById(buildId)!;
+    }
+
+    throw new AppError(409, 'BUILD_NOT_ACTIVE', 'Only queued or running builds can be cancelled');
   }
 
   async reconcileEnqueueing(): Promise<void> {

@@ -86,6 +86,15 @@ export function buildRoutes(context: AppContext): FastifyPluginAsync {
       return reply.send(stream);
     });
 
+    app.post('/:buildId/cancel', async (request) => {
+      const buildId = buildIdSchema.parse((request.params as { buildId: string }).buildId);
+      const build = await context.buildRequests.cancel(
+        buildId,
+        request.cmsPrincipal?.role === 'member' ? request.cmsPrincipal.email : 'cms-admin',
+      );
+      return { build };
+    });
+
     app.post('/:buildId/retry', async (request, reply) => {
       const buildId = buildIdSchema.parse((request.params as { buildId: string }).buildId);
       const input = retryBodySchema.parse(request.body ?? {});

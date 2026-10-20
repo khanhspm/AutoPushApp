@@ -32,6 +32,16 @@ export interface SigningProfileCandidate {
   warnings: SigningDiscoveryWarning[]
 }
 
+export interface SigningInventoryProfile extends SigningProfileCandidate {
+  bundleId: string
+}
+
+export interface SigningInventory {
+  profiles: SigningInventoryProfile[]
+  certificates: SigningCertificateCandidate[]
+  warnings: SigningDiscoveryWarning[]
+}
+
 export interface SigningDiscoveryResult {
   bundleId: string
   profiles: SigningProfileCandidate[]
@@ -197,6 +207,7 @@ export interface Build {
   attemptCount?: number
   retryOfId?: string | null
   failurePhase?: string | null
+  cancelRequestedAt?: string | null
   createdAt: string
   queuedAt?: string | null
   startedAt?: string | null

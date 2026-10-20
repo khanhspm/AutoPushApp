@@ -1,14 +1,19 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../api/client'
 import type { Project } from '../types'
 import { ProjectDetailPage } from './ProjectDetailPage'
 
 vi.mock('../api/client', () => ({
   api: {
+    getRepositoryFolders: vi.fn(),
+    getGit: vi.fn(),
+    runTerminal: vi.fn(),
+    cloneRepository: vi.fn(),
+    gitOperation: vi.fn(),
     getProject: vi.fn(),
     setupAndValidateProject: vi.fn(),
     triggerBuild: vi.fn(),
@@ -51,6 +56,8 @@ function renderPage() {
 describe('ProjectDetailPage Setup & Validate', () => {
   beforeEach(() => {
     vi.resetAllMocks()
+    vi.mocked(api.getRepositoryFolders).mockResolvedValue({ roots: [], folders: [] })
+    vi.mocked(api.getGit).mockResolvedValue({ branch: 'main', head: 'abcdef', dirty: false, branches: ['main'], commits: [] })
     vi.mocked(api.getProject).mockResolvedValue(project)
   })
 
@@ -92,3 +99,18 @@ describe('ProjectDetailPage Setup & Validate', () => {
     expect(api.setupAndValidateProject).toHaveBeenCalledTimes(2)
   })
 })
+
+
+it('submits a test build with Lark suppressed', async () => {
+  vi.mocked(api.getProject).mockResolvedValue({ ...project, enabled: true });
+  vi.mocked(api.getGit).mockResolvedValue({ branch: 'main', head: 'abc', dirty: false, branches: ['main'], commits: [] });
+  vi.mocked(api.triggerBuild).mockImplementation(() => new Promise(() => {}));
+  renderPage();
+  const user = userEvent.setup();
+  await user.type(await screen.findByLabelText('App version'), '1.2');
+  await user.type(screen.getByLabelText('Build number'), '10');
+  await user.click(screen.getByRole('button', { name: 'Test build (no Lark)' }));
+  await waitFor(() => expect(api.triggerBuild).toHaveBeenCalledWith('setup-app', expect.objectContaining({ testBuild: true, appVersion: '1.2', buildNumber: '10' })));
+});
+
+afterEach(cleanup)

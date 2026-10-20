@@ -20,6 +20,8 @@ describe('Fastlane signing environment', () => {
     process.env.APP_FIREBASE_TOKEN = 'firebase-secret';
     process.env.BUNDLE_BIN = '/opt/homebrew/bin/bundle';
     process.env.BUNDLE_GEMFILE = '/tmp/autopush/Gemfile';
+    process.env.FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT = '90';
+    process.env.FASTLANE_XCODEBUILD_SETTINGS_RETRIES = '3';
 
     const config: ProjectConfigSnapshotV2 = {
       schemaVersion: 2,
@@ -56,6 +58,8 @@ describe('Fastlane signing environment', () => {
       AUTOPUSH_SIGNING_CERTIFICATE: 'Apple Distribution',
       FIREBASE_CLI_TOKEN: 'firebase-secret',
       BUNDLE_BIN: '/opt/homebrew/bin/bundle',
+      FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: '90',
+      FASTLANE_XCODEBUILD_SETTINGS_RETRIES: '3',
     });
     expect(JSON.parse(result.childEnv.AUTOPUSH_PROVISIONING_PROFILES_JSON!)).toEqual(config.provisioningProfiles);
     expect(result.childEnv.MATCH_PASSWORD).toBeUndefined();

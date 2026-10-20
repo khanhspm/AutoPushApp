@@ -1526,10 +1526,19 @@ bundle --version
 
 ### Fastlane timeout
 
+- Nếu lỗi là `xcodebuild -showBuildSettings timed out`, wrapper mặc định chờ 60 giây cho lần thử đầu (Fastlane mặc định chỉ 3 giây). Có thể đặt `FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT` và `FASTLANE_XCODEBUILD_SETTINGS_RETRIES` trong môi trường worker rồi restart worker; đây là timeout riêng với `BUILD_TIMEOUT_MS`.
 - Kiểm tra full build log.
 - Xác định Xcode đang chờ prompt, keychain unlock hoặc signing dialog không.
 - Kiểm tra network tới Git/Apple/Firebase.
 - Chỉ tăng `BUILD_TIMEOUT_MS` sau khi xác định build thật sự cần lâu hơn.
+
+### Kiểm tra trước build và tự dọn archive
+
+- Worker kiểm tra scheme yêu cầu bằng `xcodebuild -list -json` trước khi Fastlane thay đổi version/build number. Scheme sai sẽ bị chặn với danh sách scheme hợp lệ, thay vì tự đổi sang scheme khác. Repository cần một `.xcworkspace` (ưu tiên) hoặc một `.xcodeproj` tại thư mục gốc.
+- Cả **Test Build** và **Build** dùng một thư mục archive tạm riêng cho mỗi attempt, qua `GYM_ARCHIVE_PATH`. Fastfile/Gymfile tuỳ chỉnh phải tôn trọng biến này, không ghi đè `archive_path` sang nơi khác.
+- Sau khi Fastlane kết thúc (gồm export/upload), worker xoá archive tạm cả khi thành công, lỗi, timeout hoặc huỷ. IPA, log và các archive cũ/tạo thủ công được giữ nguyên. Kết quả cleanup được ghi vào build log; lỗi cleanup không đổi kết quả upload thành công.
+- Nếu worker bị `kill -9`, máy mất điện hoặc hệ điều hành dừng đột ngột, cleanup không thể chạy; thư mục tạm có prefix `autopush-archive-` có thể còn lại. Không tự quét/xoá toàn bộ Xcode Archives.
+- Preflight chặn lỗi cấu hình đã biết; compile, signing, mạng và dịch vụ bên ngoài vẫn có thể lỗi dù đã điền đủ thông tin.
 
 ### `Fastlane exited with code N`
 
@@ -1615,3 +1624,41 @@ Nếu worker bị dừng khi build đang `running`, hệ thống không tự res
 ## License
 
 Private project — `UNLICENSED`.
+
+### CMS Git, terminal and test builds
+
+Run the API and worker on the same build Mac, with the same checkout filesystem,
+Unix user and environment. Set `IOS_REPO_ROOTS` to the comma-separated parent
+folders containing projects. The project form lists their immediate child folders;
+the native chooser remains available for deeper paths. Select a folder, or enter
+an SSH Git URL and a new folder name to clone into a configured root, then use
+**Terminal / setup** to install project dependencies before saving/enabling it.
+
+Git operations, folder listing, cloning and terminal execution require a CMS admin.
+SSH uses the build Mac's keys/agent and known_hosts, with interactive prompts disabled.
+Configure repository access and trust the Git host on that Mac before cloning.
+A failed clone leaves its newly created destination for inspection; use a new folder
+name on retry or remove the incomplete folder on the Mac.
+
+Project details show the current branch, commit, dirty state and latest 30 commits.
+**Fetch** refreshes local remote-tracking refs; **Checkout** switches an existing
+local branch or creates a tracking branch for a remote branch. Local changes must
+be committed or stashed first. Checkout does not automatically pull an existing
+local branch. Terminal commands run via Bash with the selected project as cwd,
+stop on failure, and return combined stdout/stderr and exit code when finished.
+Commands are non-interactive, have a 15-minute timeout, and retain the last 256 KB
+of output. Keep commands in the foreground; use Terminal for longer interactive work.
+
+Repository locks coordinate the API, setup and worker. Git mutations and terminal
+commands reject repositories with queued/running builds. Build submissions capture
+the Git branch/commit. Validation runs before enqueue and again immediately before
+Fastlane; a changed commit or project configuration requires a new build request.
+Locks live in the build user's temporary directory as `autopush-<sha256 of canonical
+repo path>.lock`. After a hard process crash, remove the corresponding stale lock
+only after confirming no operation/build process is still using that repository.
+
+**Test build (no Lark)** performs the normal Fastlane/Firebase delivery but suppresses
+all application-generated Lark success/failure messages, including enqueue failures
+and retries. The mode and captured Git revision appear in build details. No database
+migration is needed: these values are persisted in the existing config snapshot.
+Custom Fastlane lanes that send their own messages must manage those separately.

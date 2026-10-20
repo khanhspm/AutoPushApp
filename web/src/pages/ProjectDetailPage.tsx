@@ -1,3 +1,4 @@
+import { RepositoryGit, ProjectTerminal } from '../components/RepositoryTools'
 import { FormEvent, useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from 'react-router-dom'
@@ -27,13 +28,13 @@ export function ProjectDetailPage() {
       void queryClient.invalidateQueries({ queryKey: ['projects'] })
     },
   })
-  const trigger = useMutation({ mutationFn: (input: { appVersion: string; scheme: string; buildNumber: string; releaseNotes?: string }) => api.triggerBuild(projectKey, input), onSuccess: (build) => navigate(`/builds/${build.id}`) })
+  const trigger = useMutation({ mutationFn: (input: { appVersion: string; scheme: string; buildNumber: string; releaseNotes?: string; testBuild?: boolean }) => api.triggerBuild(projectKey, input), onSuccess: (build) => navigate(`/builds/${build.id}`) })
   const remove = useMutation({ mutationFn: () => api.deleteProject(projectKey), onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ['projects'] }); navigate('/projects', { replace: true }) } })
 
-  function submitBuild(event: FormEvent) {
+  function submitBuild(event: FormEvent, testBuild = false) {
     event.preventDefault(); const parsed = buildTriggerSchema.safeParse({ appVersion, scheme, buildNumber, releaseNotes })
     if (!parsed.success) return setErrors(firstZodError(parsed.error))
-    setErrors({}); trigger.mutate(parsed.data)
+    setErrors({}); trigger.mutate(testBuild ? { ...parsed.data, testBuild: true } : parsed.data)
   }
   if (project.isLoading) return <LoadingState label="Loading project" />
   if (project.isError || !project.data) return <ErrorState error={project.error} onRetry={() => project.refetch()} />
@@ -47,15 +48,19 @@ export function ProjectDetailPage() {
     <PageHeader eyebrow={<span className={`project-state ${data.enabled ? '' : 'disabled'}`}><span />{data.enabled ? 'Enabled' : 'Disabled'}</span>} title={data.displayName} description={`Project key: ${data.projectKey}`} actions={<><Link className="button button-secondary" to={`/projects/${projectKey}/edit`}>Edit settings</Link><button className="button button-ghost danger-text" onClick={() => setDeleteOpen(true)}>Delete</button></>} />
     <section className="detail-grid">
       <div className="detail-main page-stack-small">
+        <RepositoryGit projectKey={projectKey} />
+        <ProjectTerminal repoPath={data.repoPath} />
         <article className="panel build-trigger-card">
           <div className="panel-header"><div><p className="panel-kicker">New delivery</p><h2>Trigger build</h2></div><span className="keyboard-hint">Idempotent</span></div>
-          <form className="build-trigger-form" onSubmit={submitBuild}>
+          <form className="build-trigger-form" onSubmit={(event) => submitBuild(event)}>
             <label className="field"><span className="field-label">Scheme</span><input className="input mono" value={scheme} onChange={(e) => setScheme(e.target.value)} placeholder="PrankCall" /><FieldError message={errors.scheme} /></label>
             <label className="field"><span className="field-label">App version</span><input className="input mono" value={appVersion} onChange={(e) => setAppVersion(e.target.value)} placeholder="1.1" /><FieldError message={errors.appVersion} /></label>
             <label className="field"><span className="field-label">Build number</span><input className="input mono" value={buildNumber} onChange={(e) => setBuildNumber(e.target.value)} placeholder="6" /><FieldError message={errors.buildNumber} /></label>
             <label className="field"><span className="field-label">Release notes <small>Optional</small></span><input className="input" value={releaseNotes} onChange={(e) => setReleaseNotes(e.target.value)} placeholder="What changed in this build" /></label>
             <button className="button button-primary" disabled={!data.enabled || trigger.isPending}>{trigger.isPending ? 'Queuing…' : 'Queue build'}</button>
+            <button type="button" className="button button-secondary" disabled={!data.enabled || trigger.isPending} onClick={(event) => submitBuild(event, true)}>Test build (no Lark)</button>
           </form>
+          <p className="form-note">Every build is validated before queuing and again on the worker. Test builds still distribute to Firebase.</p>
           {!data.enabled && <p className="form-note warning-text">Run Setup &amp; Validate, then enable this project before triggering builds.</p>}
           {trigger.isError && <div className="inline-alert" role="alert">{trigger.error.message}</div>}
         </article>

@@ -19,6 +19,7 @@ import { authRoutes } from './routes/auth';
 import { buildRoutes } from './routes/builds';
 import { cmsAccountRoutes } from './routes/cms-accounts';
 import { dashboardRoutes } from './routes/dashboard';
+import { repositoryOperationRoutes } from './routes/repository-operations';
 import { projectRoutes } from './routes/projects';
 import { repositoryRoutes } from './routes/repositories';
 import { signingRoutes } from './routes/signing';
@@ -147,6 +148,7 @@ export async function buildApp(context: AppContext) {
             };
       });
       await cms.register(dashboardRoutes(context), { prefix: '/dashboard' });
+      await cms.register(repositoryOperationRoutes(context));
       await cms.register(projectRoutes(context), { prefix: '/projects' });
       await cms.register(buildRoutes(context), { prefix: '/builds' });
       await cms.register(repositoryRoutes(context), { prefix: '/repositories' });
@@ -171,27 +173,35 @@ export async function buildApp(context: AppContext) {
       throw new Error(`CMS build is missing at ${indexPath}; run npm run build:web first`);
     });
 
+    // Apply after sendFile has set its headers, including direct /index.html requests.
+    app.addHook('onSend', async (_request, reply, payload) => {
+      if (String(reply.getHeader('content-type')).startsWith('text/html')) {
+        reply.header('Cache-Control', 'no-cache');
+      }
+      return payload;
+    });
+
     await app.register(fastifyStatic, {
       root: env.CMS_DIST_PATH,
-      wildcard: false,
+      // Resolve files per request so a new build's asset names work without a restart.
+      wildcard: true,
       index: false,
       maxAge: '1y',
       immutable: true,
     });
 
     app.get('/', async (_request, reply) => {
-      reply.header('Cache-Control', 'no-cache');
       return reply.sendFile('index.html');
     });
 
     app.setNotFoundHandler(async (request, reply) => {
       if (
         request.method === 'GET' &&
+        !request.url.startsWith('/assets/') &&
         !request.url.startsWith('/api/') &&
         !request.url.startsWith('/health') &&
         !request.url.startsWith('/webhook/')
       ) {
-        reply.header('Cache-Control', 'no-cache');
         return reply.sendFile('index.html');
       }
       return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Route was not found' } });

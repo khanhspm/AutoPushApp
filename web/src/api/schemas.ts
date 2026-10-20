@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { Build, BuildDetail, BuildListResult, CmsAccessOverview, CmsAccount, CmsInvitation, DashboardData, Project, ProjectSetupResult, ProjectValidation, RepositoryCandidate, RepositoryDiscoveryResult, Session, SigningDiscoveryResult, SigningProfileImportResult, User } from '../types'
+import type { Build, BuildDetail, BuildListResult, CmsAccessOverview, CmsAccount, CmsInvitation, DashboardData, Project, ProjectSetupResult, ProjectValidation, RepositoryCandidate, RepositoryDiscoveryResult, Session, SigningDiscoveryResult, SigningInventory, SigningProfileImportResult, User } from '../types'
 
 const unknownObject = z.object({}).passthrough()
 const recordSchema = z.record(z.unknown())
@@ -155,6 +155,16 @@ export function parseSigningDiscovery(value: unknown): SigningDiscoveryResult {
   return signingDiscoverySchema.parse(value)
 }
 
+const signingInventorySchema = z.object({
+  profiles: z.array(signingProfileCandidateSchema.extend({ bundleId: z.string().trim().min(1) }).strict()),
+  certificates: z.array(signingCertificateCandidateSchema),
+  warnings: z.array(signingDiscoveryWarningSchema),
+}).strict()
+
+export function parseSigningInventory(value: unknown): SigningInventory {
+  return signingInventorySchema.parse(value)
+}
+
 const signingProfileImportSchema = signingDiscoverySchema.extend({
   importedProfileUuid: z.string().trim().min(1),
 }).strict()
@@ -250,6 +260,7 @@ export function parseBuild(value: unknown): Build {
     attemptCount: numberValue(raw.attemptCount ?? raw.attempt_count, 0),
     retryOfId: optionalString(raw.retryOfId ?? raw.retry_of_id),
     failurePhase: optionalString(raw.failurePhase ?? raw.failure_phase),
+    cancelRequestedAt: optionalString(raw.cancelRequestedAt ?? raw.cancel_requested_at),
     createdAt: stringValue(raw.createdAt ?? raw.created_at, new Date(0).toISOString()),
     queuedAt: optionalString(raw.queuedAt ?? raw.queued_at),
     startedAt,

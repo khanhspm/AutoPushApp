@@ -26,6 +26,8 @@ export function signingRoutes(context: AppContext): FastifyPluginAsync {
       (_request, body, done) => done(null, body),
     );
 
+    app.get('/inventory', async () => context.signingDiscovery.inventory());
+
     app.post('/discover', async (request) => {
       const { bundleId } = discoveryBodySchema.parse(request.body);
       return context.signingDiscovery.discover(bundleId);

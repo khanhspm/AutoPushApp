@@ -2,7 +2,7 @@ import { FormEvent } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../api/client'
-import { EmptyState, ErrorState, LoadingState, PageHeader, StatusBadge } from '../components/ui'
+import { EmptyState, ErrorState, LoadingState, PageHeader, StatusBadge, displayBuildStatus } from '../components/ui'
 import { formatBuildVersion, formatDuration, formatRelativeTime, titleCase } from '../lib/format'
 
 export function BuildsPage() {
@@ -37,7 +37,7 @@ export function BuildsPage() {
       <div className="table-scroll"><table><thead><tr><th>Build</th><th>Project</th><th>Version</th><th>Status</th><th>Source</th><th>Requested by</th><th>Duration</th><th>Created</th><th /></tr></thead><tbody>{builds.data.items.map((build) => <tr key={build.id}>
         <td><Link className="table-link mono" to={`/builds/${build.id}`}>#{build.id.slice(0,8)}</Link>{build.attemptCount && build.attemptCount > 1 ? <small className="attempt-label">Attempt {build.attemptCount}</small> : null}</td>
         <td><strong>{build.projectName ?? build.projectKey}</strong><small className="table-subtext mono">{build.projectKey}</small></td>
-        <td className="mono">{formatBuildVersion(build.appVersion, build.buildNumber)}</td><td><StatusBadge status={build.status} /></td><td>{titleCase(build.source)}</td><td>{build.requestedBy || 'System'}</td>
+        <td className="mono">{formatBuildVersion(build.appVersion, build.buildNumber)}</td><td><StatusBadge status={displayBuildStatus(build)} /></td><td>{titleCase(build.source)}</td><td>{build.requestedBy || 'System'}</td>
         <td>{formatDuration(build.durationMs)}</td><td title={build.createdAt}>{formatRelativeTime(build.createdAt)}</td><td><Link className="icon-button" aria-label={`Open build ${build.id}`} to={`/builds/${build.id}`}>→</Link></td>
       </tr>)}</tbody></table></div>
       <div className="pagination"><span>{cursor ? 'Older build page' : 'Latest builds'}</span><div>{cursor && <button className="button button-secondary button-small" onClick={() => { const next = new URLSearchParams(searchParams); next.delete('cursor'); setSearchParams(next) }}>Back to latest</button>}<button className="button button-secondary button-small" disabled={!builds.data.nextCursor} onClick={openNext}>Older builds</button></div></div>
